@@ -13,16 +13,18 @@
 
 ---
 
-## 2026-06-15 · 示例条目（用后删除）
+## 2026-06-14 · P0 同步加固 + P1 飞书告警 + mini 迁移准备
 
-- **任务**：P0 金山同步加固
+- **任务**：P0 金山同步加固、P1 飞书告警、每日核对、Mac mini 迁移准备
 - **做了**：
-  - `com.gdpower.update.plist` 定时 14:00 → 18:00
-  - `kdocs_sync.py` 加失败重试（隔 30 分钟，最多 3 次）
-- **状态**：已上线，待 6/16 验证自动任务是否跑通
-- **改动文件**：`kdocs_sync.py`、`com.gdpower.update.plist`（均已备份）
-- **下一步**：加飞书告警（接 P1）
-- **坑/备注**：改 plist 后要 `launchctl bootout/bootstrap` 重载才生效
+  - **P0 金山同步加固**：`kdocs_sync.py` 升 v6.0 检测式轮询（11:00 起反复拉取，拿到当日数据为止，最晚 18:00）；修掉 `exit 0` 假成功 bug（这才是半夜反复补数据的真正根因）；`com.gdpower.update.plist` 定时 14:00 → 11:00
+  - **P1 飞书告警**：`notify_failure()` 接飞书自定义机器人 webhook，实测推送成功（关键词＝广东电力）
+  - **每日核对**：`verify_sync.py` 每天 11:20 核对首跑结果，并把次日预测摘要推送到飞书
+  - **Mac mini 迁移准备**：日志/脚本加机器标签 `[Air]`/`[mini]`，生成 `MINI_MIGRATION.md`（待在 mini 上执行）
+- **状态**：P0/P1/核对均已上线，Air 端实测通过；mini 迁移待执行；自动任务待 6/15 起观察
+- **改动文件**：`kdocs_sync.py`(v6.0)、`com.gdpower.update.plist`、`verify_sync.py`、`MINI_MIGRATION.md`（脚本均已备份）
+- **下一步**：6/15 起观察 11:00 检测式轮询与飞书告警是否按预期触发；择机在 mini 上跑迁移
+- **坑/备注**：`exit 0` 假成功会掩盖失败、让重试形同虚设——半夜补数据的真因；改 plist 后需 `launchctl bootout/bootstrap` 重载才生效；飞书机器人必须带约定关键词否则被拦
 
 ---
 
