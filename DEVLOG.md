@@ -13,6 +13,20 @@
 
 ---
 
+## 2026-06-15 · 新功能：预测成功后推送折线图+24点表到飞书
+
+- **背景**：预测结果静默存盘，用户看不到直观结果。需预测成功后自动出图+表发飞书。
+- **做了**：
+  - `kdocs_sync.py`：新增飞书自建应用能力——`_feishu_tenant_token()`/`_feishu_upload_image()`（上传图拿 image_key）/`_feishu_push_image()`/`_feishu_push_post()`（post 富文本，可内嵌图），底层抽 `_feishu_send()` 复用（`_feishu_push` 也改为复用，行为不变）；新增可选凭证 `FEISHU_APP_ID`/`FEISHU_APP_SECRET`（缺失则发图降级、不崩）
+  - 新建 `tools/notify_prediction.py`：读 `predictions/prediction_{date}.csv`，matplotlib 出折线图（预测线+置信区间阴影+峰谷标注+均价线，PingFang HK 中文字体），存 `predictions/chart_{date}.png`；发飞书优先「一条 post：图+24点表」，无凭证/失败降级为纯文本表；`--dry-run` 只出图
+  - `update.sh` Step 3 预测成功分支挂钩子调用（失败不阻塞主流程）
+  - `.secrets.json.example` 补 `FEISHU_APP_ID`/`FEISHU_APP_SECRET` 说明
+  - 改前已备份 `kdocs_sync.py`/`update.sh`
+- **状态**：✅ 画图、py_compile、update.sh 语法、post 文本表推送飞书均验证通过（图已肉眼确认峰492.4@19/谷356.4@23）。⏳ **图片内联待用户配飞书自建应用凭证**（建应用→开图片上传权限→发布→填 app_id/secret 进 .secrets.json）后联调
+- **改动文件**：`kdocs_sync.py`、`tools/notify_prediction.py`(新)、`update.sh`、`.secrets.json.example`（均已备份/或新增）
+- **下一步**：用户配齐 app 凭证后去 `--dry-run` 跑一次确认图内联；确认后 mini 同步部署；可考虑与 verify_sync.py 11:20 摘要合并去重
+- **坑/备注**：webhook 发不了图，必须用应用凭证上传拿 image_key；post 文案需含「广东电力」命中关键词；自定义机器人 post 内嵌 img 若实测不显示则代码已有「图+表两条」降级分支
+
 ## 2026-06-15 · 金山同步加「成功通知」+ 当日轮询实战验证
 
 - **背景**：6/14 加固后只在「轮询至 18:00 仍全失败」才发飞书告警，成功是静默的；用户希望成功也报喜，每天有个正向确认。
