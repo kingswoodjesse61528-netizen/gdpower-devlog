@@ -25,9 +25,9 @@
   - **扩展存储**：把 `Downloads/01_安装包与应用`(2.9G)、wechat dmg、`Documents/电力交易`(4.1G)、`Documents/资料`(1.2G)
     移到 `/Volumes/mini外置/归档/`
   - **清缓存**：清 Google/Edge/Lark/微信开发者工具 缓存 + `~/.cache/uv,prisma` + npm + conda clean
-- **状态**：完成。内置盘 **91G → 103G**（腾出 12G）；外接盘存了归档 ~8G + gdpower 备份
+- **状态**：完成。内置盘 **91G → 108G**（腾出 17G，含后续清掉 4.7G 重型缓存）；外接盘存了归档 ~8G + gdpower 备份
 - **改动文件**：`tools/backup_to_external.sh`(新建)、`update.sh`(加 Step4)、`CLAUDE.md`(每日流程/备份/手动操作)
-- **下一步**：还有 ~4.7G「清掉会触发重下」的缓存（playwright/codex-runtimes/autoclaw/camoufox）按需再清；建议补 Time Machine
+- **下一步**：建议补 Time Machine（gdpower 已专项备份，但整机其它数据仍无备份）
 - **坑/备注**：① 跨盘 `mv` 遇 **`uchg` 不可变标志**文件删不掉源（电力交易里 446 个旧 PDF 带此标志，
   从 U 盘拷来的）——需 `chflags -R nouchg` 解标志才能删，删前已逐文件核对外接副本完整(446/446)；
   ② 移动个人数据到外接后，**只在外接盘插着时可访问**；③ gdpower 生产数据(`Documents/AI应用系统`)绝不可移动
