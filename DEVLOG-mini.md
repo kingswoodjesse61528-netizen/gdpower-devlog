@@ -31,4 +31,21 @@
 
 ---
 
+## 2026-06-15 · [mini] 同步加固迁移（从 Air 搬迁）
+
+- **任务**：把 Air 2026-06-14 做的金山同步加固迁移到 mini（照 `MINI_MIGRATION.md` 逐步执行并验证）
+- **做了**：
+  - **检测式轮询**：`kdocs_sync.py` 默认入口改为轮询同步——11:10 由 launchd 触发后进入循环，每 30min 一轮，以「本地 CSV 是否已含当日数据」为成功判据，拿到即退出，最晚试到 18:00
+  - **修 exit0 假成功 bug**：引入 `SyncResult` 三态（SUCCESS / NO_TODAY_DATA / FETCH_FAIL），`fetch_from_kdocs` 失败由 `return []` 改 `return None`；默认入口按末态 `sys.exit(0/1)`，`update.sh` 据此感知真实成败
+  - **飞书告警**：`notify_failure()` 在 18:00 仍失败时推送（webhook 走 .secrets.json，缺失则仅落日志）；消息自动带 `[mini]` 标签
+  - **每日核对**：新增 `tools/verify_sync.py` + `com.gdpower.verify.plist`，11:30 核对当日同步并把结论 + 次日预测摘要推飞书
+  - **定时调整**：`com.gdpower.update.plist` 13:00 → 11:10（错峰 Air 的 11:00）
+  - 适配本机差异：mini 的 AirScript token 是硬编码、原无 .secrets.json，故飞书配置改为「可选读取，缺失降级」，token 不动
+- **状态**：已上线，本机实测通过（编译/连通/三态分类/失败退出码契约/飞书连通均✓）；两个 launchd 触发时刻已核对（11:10 / 11:30）
+- **改动文件**：`kdocs_sync.py`、`tools/verify_sync.py`(新建)、`com.gdpower.update.plist`、`com.gdpower.verify.plist`(新建)、`.secrets.json`(新建,仅飞书)、`CLAUDE.md`(新建)（脚本/plist 均已备份 .bak）
+- **下一步**：观察 6/15 起 11:10 轮询同步与 11:30 核对是否按预期触发
+- **坑/备注**：旧逻辑「有任意行就算成功」会把「金山还没出当日数据」误判成功——是半夜反复补数据的真因；改 plist 后须 `launchctl bootout/bootstrap` 重载；金山 webhook 偶发瞬时 500，`--test` 失败先重试两次
+
+---
+
 <!-- 历史记录继续往下追加 -->
