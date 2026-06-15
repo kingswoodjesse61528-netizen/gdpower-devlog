@@ -22,9 +22,9 @@
   - `update.sh` Step 3 预测成功分支挂钩子调用（失败不阻塞主流程）
   - `.secrets.json.example` 补 `FEISHU_APP_ID`/`FEISHU_APP_SECRET` 说明
   - 改前已备份 `kdocs_sync.py`/`update.sh`
-- **状态**：✅ 画图、py_compile、update.sh 语法、post 文本表推送飞书均验证通过（图已肉眼确认峰492.4@19/谷356.4@23）。⏳ **图片内联待用户配飞书自建应用凭证**（建应用→开图片上传权限→发布→填 app_id/secret 进 .secrets.json）后联调
-- **改动文件**：`kdocs_sync.py`、`tools/notify_prediction.py`(新)、`update.sh`、`.secrets.json.example`（均已备份/或新增）
-- **下一步**：用户配齐 app 凭证后去 `--dry-run` 跑一次确认图内联；确认后 mini 同步部署；可考虑与 verify_sync.py 11:20 摘要合并去重
+- **状态**：✅ **全链路联调成功**。用户已配飞书自建应用凭证（写入 .secrets.json，已备份），真实跑通：换 token→上传图拿 image_key→发「一条 post：内嵌折线图 + 24 点表 + 峰谷摘要」，飞书端肉眼确认图内联渲染正常（无需降级到两条消息）
+- **改动文件**：`kdocs_sync.py`、`tools/notify_prediction.py`(新)、`update.sh`、`.secrets.json.example`（均已备份/或新增）；`.secrets.json` 增 FEISHU_APP_ID/SECRET（已备份）
+- **下一步**：mini 同步部署（kdocs_sync 新函数+notify_prediction.py+update.sh 钩子+app 凭证）；可考虑与 verify_sync.py 11:20 摘要合并去重
 - **坑/备注**：webhook 发不了图，必须用应用凭证上传拿 image_key；post 文案需含「广东电力」命中关键词；自定义机器人 post 内嵌 img 若实测不显示则代码已有「图+表两条」降级分支
 
 ## 2026-06-15 · 金山同步加「成功通知」+ 当日轮询实战验证
