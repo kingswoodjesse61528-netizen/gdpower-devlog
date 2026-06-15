@@ -13,6 +13,17 @@
 
 ---
 
+## 2026-06-15 · 生成 mini 部署包（待在 mini 执行）
+
+- **背景**：成功通知 + 双目录修复 + 现货分析图推送目前只在 Air 生效；mini 需同步。Air 会话碰不到 mini 文件系统，故离线打包。
+- **做了**：在 Air 生成部署包 `~/Downloads/mini-deploy/`（含 `00_diagnose.sh` 只读诊断、`01_deploy.sh` 半自动部署、`kdocs_sync.py`/`notify_prediction.py`/`sync_devlog.sh`/`update.sh` 权威新版、`.secrets.json.example`）。脚本自动：备份→部署→把写死的 `/Users/hydtzyj` 替换为本机 HOME→查依赖→py_compile→dry-run 出图；生成 `update.sh.reference` + diff 供对照。
+- **关键前提（探明）**：gdpower 无 git 远程（须 AirDrop 传文件）；代码写死 `/Users/hydtzyj`（mini 用户名不同须替换路径，脚本已处理）。
+- **状态**：✅ 包已生成、语法检查通过、确认不含真实密钥。⏳ 待在 mini 上执行（先 00_diagnose 再 01_deploy）。
+- **改动文件**：无（仅在 Air 生成 ~/Downloads/mini-deploy 部署包，未改 gdpower 生产文件）
+- **下一步（mini 端手动）**：① 补 `.secrets.json`（mini 自己的 AIRSCRIPT_TOKEN + 从 Air 复制 FEISHU_APP_ID/SECRET）② 用 update.sh.reference 替换（确认双目录修复+推送钩子）③ 不改 launchd 定时 ④ 真实发一次验证 [mini] 标签图
+- **坑/备注**：mini 旧版 token 为硬编码，须从备份旧 kdocs_sync.py 提取填进 .secrets.json；飞书 app 凭证两机通用
+---
+
 ## 2026-06-15 · 修复交易提示框「低价窗口」溢出
 
 - **背景**：右栏黄色「交易提示」框 6 行文字行距过松，末行「低价窗口」y 坐标算到框底以下，溢出框外。
