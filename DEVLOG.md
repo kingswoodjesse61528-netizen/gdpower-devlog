@@ -13,6 +13,21 @@
 
 ---
 
+## 2026-06-15 · 双目录陷阱核对（Air）— 生产已跑新版，无需修复
+
+- **背景**：mini 上发现 `update.sh` 实际执行的是「模型训练/ 目录的 WORK_DIR 副本」而非 6/14 改的 `~/gdpower/kdocs_sync.py`，导致生产一直跑旧代码、加固形同未部署（CLAUDE.md「双目录陷阱」）。怀疑 Air 同病。
+- **做了**：只诊断、未改任何文件。核对链路——
+  - launchd `com.gdpower.update.plist` → ProgramArguments 跑 `~/gdpower/update.sh`，WorkingDirectory=`~/gdpower`，触发 11:00
+  - `~/gdpower/update.sh`：`GDPOWER_DIR=~/gdpower`，第 48/50 行执行 `$GDPOWER_DIR/kdocs_sync.py`（即 `~/gdpower/kdocs_sync.py`）
+  - 该文件含全套新版标记：`SyncResult(Enum)`、`poll_and_sync()`、`notify_failure()`、fetch 失败 `return None`、`sys.exit(0 if res is SyncResult.SUCCESS else 1)`
+  - 旧版仅存归档副本 `模型训练/_archived_code_20260527/kdocs_sync.py`（0 新版标记，fetch 失败 `return []`），无脚本引用；`模型训练/kdocs_sync.py` 活跃副本不存在
+- **状态**：✅ Air 生产实际运行的就是 6/14 加固后的新版，三态/轮询/exit 码修复均已生效。**无需修复**。
+- **改动文件**：无（kdocs_sync.py 一行未动）
+- **下一步**：mini 按同法修复（让其 update.sh 改跑 `$GDPOWER_DIR/kdocs_sync.py`，保留本机 token/路径/定时）
+- **坑/备注**：Air 之所以没踩坑，是因为它的 `update.sh` 早已改成「cd 到 WORK_DIR 但运行 GDPOWER_DIR 副本」；`~/Downloads/update.sh` 是游离旧副本（跑 WORK_DIR 副本），launchd 不引用它，勿混淆
+
+---
+
 ## 2026-06-14 · P0 同步加固 + P1 飞书告警 + mini 迁移准备
 
 - **任务**：P0 金山同步加固、P1 飞书告警、每日核对、Mac mini 迁移准备
