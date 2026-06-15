@@ -13,6 +13,14 @@
 
 ---
 
+## 2026-06-16 · 更新 mini 部署包至最新
+
+- **做了**：把 `~/Downloads/mini-deploy/` 部署包刷新到 Air 当前全部能力——刷新 kdocs_sync.py / notify_prediction.py / update.sh / sync_devlog.sh，新增 notify_compare.py；`01_deploy.sh` 的备份/部署/路径替换(/Users/hydtzyj→$HOME)/编译检查均纳入 notify_compare.py；README 补「5 项功能」与两类推送验证命令。
+- **包覆盖能力**：①金山同步成功通知 ②双目录修复 ③日前预测推送(分析图+预测表格图) ④预测vs实际对比推送(对比图+对比表格图) ⑤sync_devlog rebase 修复。
+- **状态**：✅ 两脚本语法检查通过；确认包内无真实密钥（仅 .example）。⏳ 待在 mini 执行（00_diagnose→01_deploy→手动补 .secrets.json/换 update.sh→不动定时）。
+- **改动文件**：无（仅更新 ~/Downloads/mini-deploy 部署包，未动 gdpower 生产文件）
+---
+
 ## 2026-06-15 · 日前预测数据也改用「表格图」发飞书
 
 - **背景**：对齐对比图的表格化，日前预测推送的 24 点数据也从文字行改为表格图片。
