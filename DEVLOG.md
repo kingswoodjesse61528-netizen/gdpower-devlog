@@ -13,6 +13,21 @@
 
 ---
 
+## 2026-06-16 · 手机只读 PWA 看板上线（GitHub Pages）
+
+- **做了**：完成 CLAUDE.md 的 P3「手机 APP（PWA）」。手机只读看板，三视图＝次日预测曲线+指标卡+交易提示 / 准确率近30天趋势+汇总 / 模型信息+Top10特征。
+  - 新建 `tools/export_snapshot.py`：每日把 `prediction_*.csv`+`accuracy.csv`+`model_meta_v2.json`+近7天历史组装成 `data.json`，复用 `notify_prediction._load_pred/_metrics` 与 `kdocs_sync.MACHINE`；accuracy 状态阈值与 api_server `/accuracy` 同口径（>70退化/>55注意）。
+  - 新建 `tools/publish_pages.sh`：照搬 `sync_devlog.sh` 模式 push 到 `~/gdpower-pages`（远端无 main 时跳过 rebase，首推用 `-u`）。
+  - 新建仓库 `gdpower-pages`（public，已开 Pages）+ 移动优先 PWA（`index.html` 深色电网终端风 + Chart.js + manifest + sw.js 离线缓存 + 闪电图标）。
+  - `update.sh` 加 **Step 3.4**（139行后、预测成功分支内）：`whoami=hydtzyj` 网关 → 仅 Air 发布，失败只 warn 不阻断主流程。
+- **状态**：✅ data.json 校验四块齐全、数值与飞书图一致；JS/sw.js/manifest 语法过 + node 桩接跑通 render（2图表）；首推成功、Pages 构建完成、线上 index/data.json/manifest/sw/icons 全 200；线上抽检 pred_date/均价/机器/acc/model 正确。
+- **线上地址**：https://kingswoodjesse61528-netizen.github.io/gdpower-pages/
+- **改动文件**：新增 `tools/export_snapshot.py`、`tools/publish_pages.sh`；改 `update.sh`（已备份 `update.sh.bak_20260616_003803`）；新建 `~/gdpower-pages/` 仓库。
+- **下一步**：手机实测视觉 + 「添加到主屏」+ 飞行模式离线；mini 要发只需去掉 whoami 网关复用同 hook。
+- **坑**：空仓库首推时 `git pull --rebase origin main` 会因远端无 main 报错 —— publish_pages.sh 已加 `ls-remote` 判断跳过。
+
+---
+
 ## 2026-06-16 · 更新 mini 部署包至最新
 
 - **做了**：把 `~/Downloads/mini-deploy/` 部署包刷新到 Air 当前全部能力——刷新 kdocs_sync.py / notify_prediction.py / update.sh / sync_devlog.sh，新增 notify_compare.py；`01_deploy.sh` 的备份/部署/路径替换(/Users/hydtzyj→$HOME)/编译检查均纳入 notify_compare.py；README 补「5 项功能」与两类推送验证命令。
