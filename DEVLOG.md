@@ -13,6 +13,14 @@
 
 ---
 
+## 2026-06-16 · 模型 Tab 特征名中文化
+
+- **做了**：模型 Tab「Top10 特征重要性」英文特征名改中文。前端加 `FEAT_CN` 映射（覆盖全部 35 特征，已是中文的保持原样），`featCN()` 在渲染时翻译，原名留 title 便于核对。如 price_lag1→前1时电价、price_lag24→昨日同时电价、price_lag168→上周同时电价、price_roll24_mean→近24时均价、net_load→净负荷、hour_cos→小时(余弦)。
+- **改动**：仅 `~/gdpower-pages/`：index.html（FEAT_CN + renderModel）、sw.js v4→v5。data.json/export 不变（映射是纯展示层）。
+- **验证**：✅ 语法过；✅ 桩接渲染 Top10 全部中文、无残留英文；✅ 线上 sw=v5、index 含映射。
+
+---
+
 ## 2026-06-16 · 对比图去重：只留准确率 Tab
 
 - **背景**：上一步把对比图同时放进预测 Tab 与准确率 Tab，内容完全重复。对比是「复盘/准确率」内容（对的是过去有实际值的日子），预测 Tab 专注明日预测，故只留准确率 Tab。
