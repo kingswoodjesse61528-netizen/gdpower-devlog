@@ -13,6 +13,15 @@
 
 ---
 
+## 2026-06-17 · 手动补发 6/16 预测图 + 对比图到飞书
+
+- **做了**：应要求手动生成并推送 6/16 两张图到飞书群——`notify_prediction.py --date 2026-06-16`（日前电价预测 24 点折线图 + 数据表）、`notify_compare.py --date 2026-06-16`（日前预测 vs 实际对比折线图 + 数据表），各一条 post 带双图，退出码均 0。
+- **要点**：Air 现为 backup，手动场景下临时 `ks.should_push = lambda *_: True` **绕过去重守卫强制推送**（只在这次手动运行内存里生效，未改文件/角色）。消息带 `[Air]`。
+- **改动**：无（只跑现有脚本）。PNG 存档在 `~/gdpower/predictions/`（chart_/compare_ 2026-06-16）。
+- **备注**：当天 mini(primary) 11:10 自动跑会再推一次当天图，属正常 primary 行为；Air 自身 12:00 backup run 会读群发现已有而跳过。
+
+---
+
 ## 2026-06-16 · Air 配成 backup（双机主备去重）+ 修「已推送」误报
 
 - **背景**：mini 今天上线「双机主备去重」并自设 primary（11:10 同步 / 11:30 核对、总推飞书）。本机 Air 要配成 backup（晚跑、先读群看 primary 推没推、没推才顶上），双机主备才全线生效。**关键**：mini 真实源码并未传到 Air（`~/Downloads/mini-deploy/` 是 6/16 00:02 的旧 Air→mini 反向包，无 should_push），与用户确认走 **Path B**——按 `AIR_备机配置.md`＋`DEVLOG-mini.md` 规格在 Air 现有代码上**新增**主备逻辑，保留 Air 全部专属改动（`trust_env=False` 直连 / 表格图 / PWA 钩子）。
