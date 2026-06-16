@@ -22,7 +22,7 @@
 - **守卫**：`tools/notify_prediction.py`→`should_push('次日日前电价预测')`、`tools/notify_compare.py`→`should_push('预测 vs 实际')`、`tools/verify_sync.py`→import ks 后 `should_push('同步核对')`。4 个 marker 与现有推送文案逐条核对一致。
 - **角色**：`.secrets.json` 加 `NOTIFY_ROLE=backup`＋`FEISHU_CHAT_ID=oc_…8daf`（`FEISHU_APP_ID/SECRET` 本就有，两机共用）。
 - **错峰定时**：launchd 实际加载的是 `~/Library/LaunchAgents/`（非 `~/gdpower/`），两处都改并 bootout/bootstrap 重载——update 11:00→**12:00**、verify 11:20→**12:20**（晚于 mini，保证读群时 primary 已推完）。`launchctl print` 确认 Hour=12 已登记。
-- **⚠ 未竟（需后台操作）**：实测 backup 读群被飞书拒 **code 99991672**——`GET /im/v1/messages` 需 `im:message.history:readonly`（或 `im:message:readonly`/`im:message`），而文档写的 `im:message.group_msg` **不够**。当前读群失败→`should_push` 全部 fail-open=照推→**去重尚未真正生效（会双推，但不报错/不阻断）**。需在飞书开发者后台给应用 `cli_aabab854f3785bc4` 加 `im:message.history:readonly` 并**发布新版本**；mini 同应用同样需确认此 scope。
+- **✅ 读群去重已打通（当晚解决）**：排障三连——① `99991672`：`GET /im/v1/messages` 真正需 `im:message.history:readonly`（文档写的 `im:message.group_msg` 不够）；② 加 scope 发版后变 `230002`「Bot 不在群里」——发现旧共用应用 `cli_aabab854f3785bc4` 在**另一账号**下、跨账号进不了「中海油电力投资有限公司」群；③ 在**群所在账号**新建自建应用 **`cli_aabbd2a70038dbd8`**（机器人能力 + `im:message.history:readonly` + `im:resource`，已发布 + 已入群），把 Air `.secrets.json` 的 `FEISHU_APP_ID/SECRET` 换成它。实测：token ✅、列群确认 chat_id=oc_…8daf ✅、读到今日 68 条 ✅、4 marker 全 `False`（primary 已推→跳过）✅、图片上传 ✅（发图能力完好）。**代码零改动，仅换凭据。**
 
 ### 任务 B：修「已推送」误报
 - **根因**：`notify_prediction`/`notify_compare` 的 `main()` 降级分支（图分条 / 纯文本兜底）忽略发送函数返回值，无脑 `print('已推送')`＋`return 0`，底层失败也假成功（exit0 假成功变种，CLAUDE.md 陷阱9）。底层 `_feishu_send/_feishu_push_post/_feishu_push_image` 本就返真实 bool，无需改。
@@ -30,8 +30,8 @@
 
 - **验证**：✅ 4 个 py `py_compile` 全过；✅ 任务B monkeypatch 模拟推送失败——两文件各 3 场景（纯文本兜底失败 / 降级图分条失败 / 成功）全过：失败 `ret=2`＋不打印「已推送」、成功 `ret=0`＋打印「已推送」；✅ dry-run 两图正常出、`ret=0`、不发飞书；✅ launchd 登记 12:00/12:20。
 - **改动文件**：`kdocs_sync.py`、`tools/notify_prediction.py`、`tools/notify_compare.py`、`tools/verify_sync.py`、`.secrets.json`、`com.gdpower.update.plist`（两处）、`com.gdpower.verify.plist`（两处）。`update.sh` 不改。各文件改前均 `.bak_时间戳` 备份。
-- **下一步**：①飞书后台加 `im:message.history:readonly` 并发布→Air/mini 重测 4 marker 应「已存在→跳过」（在此之前 backup 走 fail-open 照推）；②可选从 mini 真发一次确认双机错峰协同。
-- **坑**：①读群真正需要的 scope 是 `im:message.history:readonly`，不是文档/DEVLOG-mini 写的 `im:message.group_msg`；②launchd 权威 plist 在 `~/Library/LaunchAgents/`，`~/gdpower/` 那份只是源副本，改定时两处都要改并从 LaunchAgents 重载；③`should_push` 设计为 fail-open（读不到照推），保证去重故障时「宁可多推不可漏推」。
+- **下一步**：①（可选）mini 那台把 `.secrets.json` 的 `FEISHU_APP_ID/SECRET` 也换成新应用 `cli_aabbd2a70038dbd8`——mini=primary 不读群、当前用旧 app 发图仍可用，但旧 app 在另一账号、为防其失效 + 未来角色互换，建议统一换新 app；②可选从 mini 真发一次确认双机错峰协同。
+- **坑**：①读群真正需要的 scope 是 `im:message.history:readonly`，不是文档/DEVLOG-mini 写的 `im:message.group_msg`；②**自建应用必须和群同账号/同租户**才能入群读消息——旧共用 app 在另一账号、跨账号入不了群（`230002`），解法是在群所在账号建新 app；③`_feishu_upload_image` 与读群共用 `FEISHU_APP_ID/SECRET`，换 app 时新 app 要同时有 `im:resource`（已加，发图正常）；④launchd 权威 plist 在 `~/Library/LaunchAgents/`，`~/gdpower/` 那份只是源副本，改定时两处都改并从 LaunchAgents 重载；⑤`should_push` 设计为 fail-open（读不到照推），保证去重故障时「宁可多推不可漏推」。
 
 ---
 
