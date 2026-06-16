@@ -13,6 +13,17 @@
 
 ---
 
+## 2026-06-16 · 修复对比图漏发飞书（系统代理 503）
+
+- **现象**：今天日前 vs 实际对比图没发到飞书；同一次运行的预测图发成功了。
+- **根因**（systematic-debugging）：`kdocs_sync.py` 的 requests 调用未设 proxies，macOS 上 requests(trust_env=True) 经 `getproxies_macosx_sysconf()` 读系统科学上网代理 127.0.0.1:1082（无任何环境变量也会读）。飞书/金山是境内服务却走该代理；11:32 代理瞬时 503 → 图片上传+webhook 全失败。notify_prediction 早几秒赶上代理正常，故只丢对比图。冒烟枪：`urllib.getproxies()` / `get_environ_proxies('https://open.feishu.cn')` 均返回 1082。
+- **修复**：`kdocs_sync.py` + `tools/verify_sync.py` 改用 `_SESSION = requests.Session(); _SESSION.trust_env=False`，所有 requests.post/get 换成 `_SESSION.*`，绕开系统代理直连。
+- **验证**：✅ py_compile 过；✅ 证明修复后会话对飞书解析代理为空(直连)、旧行为仍解析到 1082；✅ 重发 2026-06-16 对比图，打印「飞书已推送（折线图+表格图 一条 post）」(仅真成功才打印)、退出码 0、飞书群已收到。
+- **改动文件**：`kdocs_sync.py`（5 处调用，已备份）、`tools/verify_sync.py`（1 处，已备份）；CLAUDE.md 加陷阱 9。
+- **遗留待办**：notify_compare/notify_prediction 降级分支 `print('已推送')` 是误报（底层失败也照打、main() 仍 return 0）→ 漏发无告警，待改为按真实推送结果置退出码，让 update.sh `|| warn` 能触发。
+
+---
+
 ## 2026-06-16 · 手机只读 PWA 看板上线（GitHub Pages）
 
 - **做了**：完成 CLAUDE.md 的 P3「手机 APP（PWA）」。手机只读看板，三视图＝次日预测曲线+指标卡+交易提示 / 准确率近30天趋势+汇总 / 模型信息+Top10特征。
