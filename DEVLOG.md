@@ -13,6 +13,15 @@
 
 ---
 
+## 2026-06-16 · 对比图去重：只留准确率 Tab
+
+- **背景**：上一步把对比图同时放进预测 Tab 与准确率 Tab，内容完全重复。对比是「复盘/准确率」内容（对的是过去有实际值的日子），预测 Tab 专注明日预测，故只留准确率 Tab。
+- **做了**：移除预测 Tab 的 cmpCard2 + 画布；`CMP_MOUNTS` 退回单挂载点（泛化结构保留便于以后增减）；`sw.js` v3→v4。
+- **验证**：✅ 语法过；✅ 桩接确认只创建 predChart/accChart/cmpChart（无 cmpChart2）；✅ 线上 cmpCard2=0、准确率对比卡=1、sw=v4。
+- **改动**：仅 `~/gdpower-pages/`：index.html、sw.js。
+
+---
+
 ## 2026-06-16 · 对比图也加到预测 Tab（双 Tab 共享选中日）
 
 - **做了**：预测 Tab 底部也放一份「日前预测 vs 实际」对比图。把 renderCompare/drawCompare 泛化为多挂载点（`CMP_MOUNTS`），准确率 Tab 与预测 Tab 共享同一 `CMP_SEL`，切一处两处同步；每挂载点独立 chart 对象（`cmpCharts` 按 canvas id）。
