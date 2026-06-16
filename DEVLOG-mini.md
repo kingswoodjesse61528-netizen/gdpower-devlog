@@ -13,6 +13,26 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-06-16 · [mini] 双机主备去重 + 自动故障切换（mini 转 primary，全功能上线）
+
+- **任务**：mini 部署预测推送后会和 Air 推同一飞书群、一部手机收两条；要求「互为主备 + 一台挂了另一台自动顶上」
+- **方案**：`kdocs_sync.py` 新增 `NOTIFY_ROLE`(primary|backup|silent) + `FEISHU_CHAT_ID` + 三函数
+  `_feishu_today_message_contents`/`already_notified_today`/`should_push`。primary 总推；backup 用自建应用读「今天本群消息」，
+  已有该类推送就跳过、没有才顶上；查不到群历史 fail-open 照推。marker 机器标签无关：
+  `金山同步成功`/`次日日前电价预测`/`预测 vs 实际`/`同步核对`
+- **角色**：**mini=primary（11:10/11:30 先跑）、Air=backup（需配 ~12:00/~12:20 晚跑）**。mini 是台式机常年在线，更适合当主
+- **做了（mini 侧，已端到端验证）**：
+  - 部署新版 `kdocs_sync.py` 到 **gdpower + WORK_DIR 两处**；新增 `tools/notify_prediction.py`+`notify_compare.py`（mini 原来没有）
+  - **双目录修复**：`update.sh` Step1 改跑 `$GDPOWER_DIR/kdocs_sync.py`；predict_archive 后加 Step3.5 推预测图+对比图；保留 Step4 备份
+  - `tools/verify_sync.py` 加 `should_push('同步核对')` 守卫
+  - `.secrets.json` 补全：`AIRSCRIPT_TOKEN`(旧硬编码迁入) + `FEISHU_APP_ID/SECRET`(Air 自建应用 `cli_aaac0...`，两机共用) + `FEISHU_CHAT_ID=oc_ebc411bd468de48d788b048d541b8daf` + `NOTIFY_ROLE=primary`
+  - 飞书后台：自建应用「周艺军的飞书 CLI」加入群 + 开 `im:message.group_msg` 读权限（之前只做图片上传、不在群里）
+  - 验证：py_compile 全过；预测图/对比图 --dry-run 正常出图；**模拟 backup 角色真实读群，4 marker 全部「已存在→跳过」**
+- **状态**：mini（主机）完成并验证。**待办：Air（备机）按部署包 `AIR_备机配置.md` 配置才能全线生效**
+- **改动文件**：`kdocs_sync.py`(双副本)、`tools/notify_prediction.py`/`notify_compare.py`(新增)、`update.sh`、`tools/verify_sync.py`、`.secrets.json`、`CLAUDE.md`；部署包新增 `AIR_备机配置.md`/`find_chat_id.py`
+- **下一步**：① Air 拷 3 文件 + 改 verify_sync + secrets 加 backup/chat_id + 定时挪到 ~12:00；② 可选从 mini 真发一次确认
+- **坑/备注**：① 自定义机器人 webhook 只能发不能读，去重「读群」必须靠自建应用（两个不同身份）；② 自建应用读群需 `im:message.group_msg` + 在群里 + chat_id，少一样就 `230027` 报错；③ 自建应用是云端实体、不绑机器，两机共用同一 App ID/Secret；④ 备份在 `_dedup_deploy_backup_20260616_193155/` 与 `.secrets.json.bak_*`
+
 ---
 
 ## 2026-06-15 · [mini] 外接 500G 盘：内置瘦身 + 扩展存储 + gdpower 专项备份
