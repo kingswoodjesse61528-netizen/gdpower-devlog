@@ -13,6 +13,28 @@
 
 ---
 
+## 2026-06-16 · Air 配成 backup（双机主备去重）+ 修「已推送」误报
+
+- **背景**：mini 今天上线「双机主备去重」并自设 primary（11:10 同步 / 11:30 核对、总推飞书）。本机 Air 要配成 backup（晚跑、先读群看 primary 推没推、没推才顶上），双机主备才全线生效。**关键**：mini 真实源码并未传到 Air（`~/Downloads/mini-deploy/` 是 6/16 00:02 的旧 Air→mini 反向包，无 should_push），与用户确认走 **Path B**——按 `AIR_备机配置.md`＋`DEVLOG-mini.md` 规格在 Air 现有代码上**新增**主备逻辑，保留 Air 全部专属改动（`trust_env=False` 直连 / 表格图 / PWA 钩子）。
+
+### 任务 A：Air→backup
+- **kdocs_sync.py 新增**（未动任何现有函数）：读 `NOTIFY_ROLE`（缺省 primary）/`FEISHU_CHAT_ID`；三函数 `_feishu_today_message_contents`（自建应用读今日本群消息，`GET /im/v1/messages`，复用 `_feishu_tenant_token`＋`_SESSION` 直连，读不到→None）/`already_notified_today`（子串匹配，机器标签无关，返 bool|None）/`should_push`（silent→不推；primary→总推；backup→已有跳过、没有顶上、读不到 fail-open 照推）。`notify_success` 套 `should_push('金山同步成功')` 守卫；`notify_failure` 不守卫（两机都失败都该告警）。
+- **守卫**：`tools/notify_prediction.py`→`should_push('次日日前电价预测')`、`tools/notify_compare.py`→`should_push('预测 vs 实际')`、`tools/verify_sync.py`→import ks 后 `should_push('同步核对')`。4 个 marker 与现有推送文案逐条核对一致。
+- **角色**：`.secrets.json` 加 `NOTIFY_ROLE=backup`＋`FEISHU_CHAT_ID=oc_…8daf`（`FEISHU_APP_ID/SECRET` 本就有，两机共用）。
+- **错峰定时**：launchd 实际加载的是 `~/Library/LaunchAgents/`（非 `~/gdpower/`），两处都改并 bootout/bootstrap 重载——update 11:00→**12:00**、verify 11:20→**12:20**（晚于 mini，保证读群时 primary 已推完）。`launchctl print` 确认 Hour=12 已登记。
+- **⚠ 未竟（需后台操作）**：实测 backup 读群被飞书拒 **code 99991672**——`GET /im/v1/messages` 需 `im:message.history:readonly`（或 `im:message:readonly`/`im:message`），而文档写的 `im:message.group_msg` **不够**。当前读群失败→`should_push` 全部 fail-open=照推→**去重尚未真正生效（会双推，但不报错/不阻断）**。需在飞书开发者后台给应用 `cli_aabab854f3785bc4` 加 `im:message.history:readonly` 并**发布新版本**；mini 同应用同样需确认此 scope。
+
+### 任务 B：修「已推送」误报
+- **根因**：`notify_prediction`/`notify_compare` 的 `main()` 降级分支（图分条 / 纯文本兜底）忽略发送函数返回值，无脑 `print('已推送')`＋`return 0`，底层失败也假成功（exit0 假成功变种，CLAUDE.md 陷阱9）。底层 `_feishu_send/_feishu_push_post/_feishu_push_image` 本就返真实 bool，无需改。
+- **修复**：两文件对称——降级分支先全发再 `all(img)` and `post_ok` 判定，真成功才打印「已推送」return 0，否则打印「推送失败…」`return 2`；纯文本兜底同理。只在确实成功打印「已推送」。`update.sh` **无需改**（line 135–139 推送钩子早是 `… || warn "…不影响主流程"`，退出码修好后这层 `|| warn` 才真正生效、主流程不中断）。
+
+- **验证**：✅ 4 个 py `py_compile` 全过；✅ 任务B monkeypatch 模拟推送失败——两文件各 3 场景（纯文本兜底失败 / 降级图分条失败 / 成功）全过：失败 `ret=2`＋不打印「已推送」、成功 `ret=0`＋打印「已推送」；✅ dry-run 两图正常出、`ret=0`、不发飞书；✅ launchd 登记 12:00/12:20。
+- **改动文件**：`kdocs_sync.py`、`tools/notify_prediction.py`、`tools/notify_compare.py`、`tools/verify_sync.py`、`.secrets.json`、`com.gdpower.update.plist`（两处）、`com.gdpower.verify.plist`（两处）。`update.sh` 不改。各文件改前均 `.bak_时间戳` 备份。
+- **下一步**：①飞书后台加 `im:message.history:readonly` 并发布→Air/mini 重测 4 marker 应「已存在→跳过」（在此之前 backup 走 fail-open 照推）；②可选从 mini 真发一次确认双机错峰协同。
+- **坑**：①读群真正需要的 scope 是 `im:message.history:readonly`，不是文档/DEVLOG-mini 写的 `im:message.group_msg`；②launchd 权威 plist 在 `~/Library/LaunchAgents/`，`~/gdpower/` 那份只是源副本，改定时两处都要改并从 LaunchAgents 重载；③`should_push` 设计为 fail-open（读不到照推），保证去重故障时「宁可多推不可漏推」。
+
+---
+
 ## 2026-06-16 · 模型 Tab 特征名中文化
 
 - **做了**：模型 Tab「Top10 特征重要性」英文特征名改中文。前端加 `FEAT_CN` 映射（覆盖全部 35 特征，已是中文的保持原样），`featCN()` 在渲染时翻译，原名留 title 便于核对。如 price_lag1→前1时电价、price_lag24→昨日同时电价、price_lag168→上周同时电价、price_roll24_mean→近24时均价、net_load→净负荷、hour_cos→小时(余弦)。
