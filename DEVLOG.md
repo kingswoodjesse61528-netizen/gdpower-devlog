@@ -13,6 +13,16 @@
 
 ---
 
+## 2026-06-16 · 手机 PWA 看板新增「日前预测 vs 实际」对比图（可切换最近几天）
+
+- **做了**：准确率 Tab 顶部加对比折线图，带最近 7 天日期切换 pill，默认最新一天。两线（预测蓝/实际绿）+ 偏差红阴影 + 最大偏差点标注 + 指标卡（MAE/MAPE/评级/最大偏差/预测均价/实际均价/整体方向）。
+- **数据**：`export_snapshot.py` 新增 `build_compare(days=7)`，复用 `notify_compare._load/_metrics`，data.json 加 `compare` 块（只收既有预测又有实际的日期）。
+- **前端**：`index.html` 加对比卡 + `renderCompare/drawCompare`（切日期内存重绘、destroy 旧 chart）；`sw.js` 缓存版本 v1→v2 强制刷新。
+- **验证**：✅ JS/sw 语法过；✅ 桩接跑通（3 图表实例、切日期 destroy 正常）；✅ 重生成 data.json 含 compare 7 天（最新 6-16 MAE 67.2、整体低估 56.6，与飞书对比图一致）；✅ 发布后线上 compare=7、index 含对比卡。
+- **改动文件**：`tools/export_snapshot.py`（gdpower 仓）；`~/gdpower-pages/`：index.html、sw.js、data.json。
+
+---
+
 ## 2026-06-16 · 修复对比图漏发飞书（系统代理 503）
 
 - **现象**：今天日前 vs 实际对比图没发到飞书；同一次运行的预测图发成功了。
