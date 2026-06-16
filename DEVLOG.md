@@ -13,6 +13,14 @@
 
 ---
 
+## 2026-06-16 · 对比图也加到预测 Tab（双 Tab 共享选中日）
+
+- **做了**：预测 Tab 底部也放一份「日前预测 vs 实际」对比图。把 renderCompare/drawCompare 泛化为多挂载点（`CMP_MOUNTS`），准确率 Tab 与预测 Tab 共享同一 `CMP_SEL`，切一处两处同步；每挂载点独立 chart 对象（`cmpCharts` 按 canvas id）。
+- **改动**：仅 `~/gdpower-pages/index.html`（加 cmpCard2 + JS 泛化）、`sw.js`（v2→v3）。data.json 的 compare 块不变，export 脚本无改动。
+- **验证**：✅ 语法过；✅ 桩接首渲染创建 predChart/accChart/cmpChart/cmpChart2，切日期同步重绘两图、destroy=2；✅ 线上 index 含 cmpCard2、sw=v3。
+
+---
+
 ## 2026-06-16 · 手机 PWA 看板新增「日前预测 vs 实际」对比图（可切换最近几天）
 
 - **做了**：准确率 Tab 顶部加对比折线图，带最近 7 天日期切换 pill，默认最新一天。两线（预测蓝/实际绿）+ 偏差红阴影 + 最大偏差点标注 + 指标卡（MAE/MAPE/评级/最大偏差/预测均价/实际均价/整体方向）。
