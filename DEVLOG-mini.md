@@ -28,7 +28,12 @@
   - `.secrets.json` 补全：`AIRSCRIPT_TOKEN`(旧硬编码迁入) + `FEISHU_APP_ID/SECRET`(Air 自建应用 `cli_aaac0...`，两机共用) + `FEISHU_CHAT_ID=oc_ebc411bd468de48d788b048d541b8daf` + `NOTIFY_ROLE=primary`
   - 飞书后台：自建应用「周艺军的飞书 CLI」加入群 + 开 `im:message.group_msg` 读权限（之前只做图片上传、不在群里）
   - 验证：py_compile 全过；预测图/对比图 --dry-run 正常出图；**模拟 backup 角色真实读群，4 marker 全部「已存在→跳过」**
-- **状态**：mini（主机）完成并验证。**待办：Air（备机）按部署包 `AIR_备机配置.md` 配置才能全线生效**
+- **状态**：mini（主机）完成并验证。
+- **追加（2026-06-17 真发确认时发现并修复）**：
+  - **换飞书应用**：旧 `cli_aaac0...` 没有发图权限（`im:resource:upload`）且在另一账号。换成 Air 同款新应用 **`cli_aabbd2a70038dbd8`**（群所属账号下、已入群、读群+发图齐全）。只改 `.secrets.json` 两键。
+  - **绕系统代理**：`kdocs_sync.py` 飞书请求原走系统代理 `127.0.0.1:1082`（偶发 503 → 掉图/推送失败）。新增 `_SESSION`（`requests.Session()`+`trust_env=False`），4 处飞书调用（换token/上传图/读群/webhook）全改走它。
+  - **真发确认**：mini 实发预测图+对比图，群里 `[mini]` 两条**带真图**（分析图+表格图 / 折线图+表格图）一条 post 成功。
+- **Air 侧**：Air（claude.ai 端）已自建新应用并切换、实测 backup 去重生效（其有自己一套 dedup 实现，本机这套是平行实现，靠同一群+同标题互相识别，兼容）。
 - **改动文件**：`kdocs_sync.py`(双副本)、`tools/notify_prediction.py`/`notify_compare.py`(新增)、`update.sh`、`tools/verify_sync.py`、`.secrets.json`、`CLAUDE.md`；部署包新增 `AIR_备机配置.md`/`find_chat_id.py`
 - **下一步**：① Air 拷 3 文件 + 改 verify_sync + secrets 加 backup/chat_id + 定时挪到 ~12:00；② 可选从 mini 真发一次确认
 - **坑/备注**：① 自定义机器人 webhook 只能发不能读，去重「读群」必须靠自建应用（两个不同身份）；② 自建应用读群需 `im:message.group_msg` + 在群里 + chat_id，少一样就 `230027` 报错；③ 自建应用是云端实体、不绑机器，两机共用同一 App ID/Secret；④ 备份在 `_dedup_deploy_backup_20260616_193155/` 与 `.secrets.json.bak_*`
