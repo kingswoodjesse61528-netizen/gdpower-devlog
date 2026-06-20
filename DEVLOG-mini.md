@@ -24,8 +24,12 @@
   最多 3 轮、退避 5s/15s，每轮重新换 token，全失败才返回 None 降级。一处改动，预测图 + 对比图（共 4 处调用）全部受益。
 - **验证**：py_compile 通过；真实调用 `_feishu_upload_image` 正常路径仍秒回 image_key（仅上传不发群）；gdpower 与 WORK_DIR 两份 diff 一致。
 - **状态**：完成并验证。
-- **改动文件**：`kdocs_sync.py`（gdpower + WORK_DIR 双副本）；备份 `kdocs_sync.py.bak_20260620_173111`。
-- **下一步**：① 观察明天 11:10 定时跑是否正常带图；② 可选：把同样的重试思路用到 `_feishu_tenant_token` 单独调用处（读群 fail-open 不致命，优先级低）；③ Air 备机的 `_feishu_upload_image` 若是同源可一并同步此重试。
+- **改动文件**：`kdocs_sync.py`（mini 端 gdpower + WORK_DIR 双副本，备份 `.bak_20260620_173111`）；
+  **部署包 `mini-deploy/kdocs_sync.py`（=Air 版，仅 22-23 行路径不同）已同步打同一补丁**，备份 `.bak_20260620_173822`。
+- **⚠️ Air 端待生效（mini 够不到 Air，需 Air 端执行）**：部署包已含重试补丁，Air 上按 `AIR_备机配置.md` 第 1 步重拷即可：
+  `cp ~/gdpower/kdocs_sync.py ~/gdpower/kdocs_sync.py.bak_$(date +%Y%m%d_%H%M%S)` 备份后
+  `cp $PKG/kdocs_sync.py ~/gdpower/kdocs_sync.py`（PKG=Air 上的 mini-deploy 路径），再 `py_compile` 验证；若 Air 也有 WORK_DIR 副本一并 cp。
+- **下一步**：① 观察明天 11:10 mini 定时跑是否正常带图；② Air 端重拷 kdocs_sync.py 让重试生效（见上）；③ 可选：把重试思路用到 `_feishu_tenant_token` 单独调用处（读群 fail-open 不致命，优先级低）。
 - **坑/备注**：① 重试只兜「上传/换 token」的网络抖动，webhook 文字推送(`_feishu_send`)未含此重试；② 探针技巧：上传图只拿 image_key 不发群，可当飞书发图连通性探针，不污染群。
 
 ## 2026-06-16 · [mini] 双机主备去重 + 自动故障切换（mini 转 primary，全功能上线）
