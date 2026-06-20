@@ -13,6 +13,23 @@
 
 ---
 
+## 2026-06-20(续) · PWA 双机互备 + 健康告警：去掉「仅 Air 发」单点
+
+- **背景**：PWA 发布是单点故障——`update.sh:141` 用 `if [[ "$(whoami)" == "hydtzyj" ]]` 网关，**只有 Air 发 PWA**，mini 只同步预测从不发。Air 宕机/断网 → 手机 PWA 永远停更且无人知。两机原本是「伪互备」（数据各算各、仅飞书群去重、无故障接管）。
+- **目标**（用户确认）：PWA 发布也做成**真双机互备**——两台都能发，谁先算好谁发，一台宕了另一台顶上；加「到点没更新就飞书告警」。
+- **核心机制**：用 GitHub 上 `gdpower-pages` 的 `origin/main:data.json` 当**两机共享协调状态**（`git fetch` 读，绕 Pages CDN 缓存）。实现抢发幂等。
+- **做了**：
+  - **update.sh Step 3.4 去 whoami + 抢发**：发布前内联 Python（ASCII，避 zsh 中文 heredoc 坑）`git fetch`+`git show origin/main:data.json`，若远端 `pred_date==本机PRED_DATE` 且 `generated_at` 是今天 → SKIP；否则 PUBLISH；读不到远端 → FORCE（fail-open 照发）。
+  - **publish_pages.sh 并发稳妥化**：rebase 冲突从 `abort+exit1` 改 `rebase -X ours origin/main`（实测：rebase 语境 ours=已落地的 origin/main=先发先得，自动解不丢数据）+ 3 次随机退避 + push 被拒重推 + 终态 exit 0。**注意 rebase 的 ours/theirs 方向与 merge 相反**（实测确认：-X ours 留先 push 的、-X theirs 留后 push 的）。
+  - **新增 `tools/check_pwa_health.py`**：14:30 由 launchd 触发，`git fetch` 读远端 data.json，若非「今天发、pred=明天」→ 飞书告警（含「广东电力」+marker「PWA健康」）；去重复用 `ks.should_push('PWA健康')`。用 `Path.home()` 自动适配两机路径。
+  - **新增 `com.gdpower.pwahealth.plist`**（14:30）。
+- **验证**：抢发 SKIP|Air / PUBLISH✅；publish 并发隔离实测 -X ours 自动解+零冲突标记+不卡死✅、真实 no-op 退出0✅；健康检查告警/静默/去重/读不到远端 四场景✅；现是今天数据→健康检查判正常静默✅；api 常驻 running、三定时任务登记、pages 历史无污染✅。
+- **改动文件**：`update.sh`(Step3.4)、`tools/publish_pages.sh`、新增 `tools/check_pwa_health.py` + `com.gdpower.pwahealth.plist`。备份 `*.bak_20260620_224605`。
+- **范围外/待 mini**：mini 要变成「能发 PWA」需三前提——本地 clone `~/gdpower-pages`、有 push 凭证、装新版代码+plist（路径改 zhouyijun）。出了 `MINI_PWA_HA.md` 清单。**mini push 凭证不通则 PWA 仍单点**。
+- **坑/备注**：`git rebase -X ours/theirs` 方向反直觉（rebase 时 ours=目标分支），上线前务必实测；读远端状态用 `git fetch+show` 而非 curl（绕 CDN 缓存）；告警文案必须含「广东电力」过白名单。
+
+---
+
 ## 2026-06-20 · 代理兜底（kdocs_sync v6.1）：绕 Shadowrocket TUN 直连 + launchd 多点 + 告警节流
 
 - **背景**：今天 12:00 自动同步全天失败、且无人知晓。复盘三个真 bug：① 撞上 Shadowrocket 隧道半死，连国内 `www.kdocs.cn` 都被 `SSLEOFError` 打断；② `poll_and_sync()` 靠进程内 `time.sleep(1800)` 轮询，MacBook Air 合盖睡眠时 sleep 跨睡眠不可靠 → 后续轮询全废；③ 进程睡死，18:00 的飞书告警也没发出。先手动 `update.sh` 补回了今天数据（pred 6/21 均价 370.4）。
