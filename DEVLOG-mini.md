@@ -26,9 +26,41 @@
 - **状态**：完成并验证。
 - **改动文件**：`kdocs_sync.py`（mini 端 gdpower + WORK_DIR 双副本，备份 `.bak_20260620_173111`）；
   **部署包 `mini-deploy/kdocs_sync.py`（=Air 版，仅 22-23 行路径不同）已同步打同一补丁**，备份 `.bak_20260620_173822`。
-- **⚠️ Air 端待生效（mini 够不到 Air，需 Air 端执行）**：部署包已含重试补丁，Air 上按 `AIR_备机配置.md` 第 1 步重拷即可：
-  `cp ~/gdpower/kdocs_sync.py ~/gdpower/kdocs_sync.py.bak_$(date +%Y%m%d_%H%M%S)` 备份后
-  `cp $PKG/kdocs_sync.py ~/gdpower/kdocs_sync.py`（PKG=Air 上的 mini-deploy 路径），再 `py_compile` 验证；若 Air 也有 WORK_DIR 副本一并 cp。
+- **⚠️ Air 端待生效（mini 够不到 Air；Air 本地 mini-deploy 部署包副本可能是旧的，勿依赖重拷——请直接替换函数）**：
+  在 Air 的 `~/gdpower/kdocs_sync.py`（若 WORK_DIR 也有副本则一并改）里，把整个 `def _feishu_upload_image(...)` 函数替换为下面这版（只加重试，签名/返回值兼容，与机器路径无关、照搬即可）。
+  替换前先 `cp ~/gdpower/kdocs_sync.py ~/gdpower/kdocs_sync.py.bak_$(date +%Y%m%d_%H%M%S)`，替换后 `/opt/anaconda3/envs/gdpower/bin/python -m py_compile ~/gdpower/kdocs_sync.py` 验证，再 `diff` 两副本确认一致：
+
+```python
+def _feishu_upload_image(png_path, retries=3, backoff=(5, 15)):
+    """上传本地 PNG，返回 image_key；未配置应用凭证返回 None。
+
+    偶发 SSL/网络抖动（mini 已知问题：换 token 或上传时 SSLEOFError）下自动重试：
+    每轮重新换 token + 上传，失败按 backoff 退避后再试，最多 retries 轮，
+    全失败才返回 None（调用方再降级纯文本表）。"""
+    for attempt in range(1, retries + 1):
+        token = _feishu_tenant_token()
+        if token:
+            try:
+                with open(png_path, 'rb') as f:
+                    r = _SESSION.post(FEISHU_OPEN_BASE + '/im/v1/images',
+                                      headers={'Authorization': 'Bearer ' + token},
+                                      data={'image_type': 'message'},
+                                      files={'image': f},
+                                      timeout=20)
+                j = r.json()
+                if j.get('code') == 0:
+                    return j.get('data', {}).get('image_key')
+                log.error('上传图片失败：' + str(j))
+            except Exception as e:
+                log.error('上传图片异常：' + str(e))
+        if attempt < retries:
+            wait = backoff[min(attempt - 1, len(backoff) - 1)]
+            log.warning('上传图片第 %d/%d 次未成功，%ds 后重试...' % (attempt, retries, wait))
+            time.sleep(wait)
+    log.error('上传图片重试 %d 次仍失败，放弃（将降级纯文本）' % retries)
+    return None
+```
+  （依赖 `time` 模块——kdocs_sync.py 已 import，无需新增。）
 - **下一步**：① 观察明天 11:10 mini 定时跑是否正常带图；② Air 端重拷 kdocs_sync.py 让重试生效（见上）；③ 可选：把重试思路用到 `_feishu_tenant_token` 单独调用处（读群 fail-open 不致命，优先级低）。
 - **坑/备注**：① 重试只兜「上传/换 token」的网络抖动，webhook 文字推送(`_feishu_send`)未含此重试；② 探针技巧：上传图只拿 image_key 不发群，可当飞书发图连通性探针，不污染群。
 
