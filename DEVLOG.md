@@ -13,6 +13,22 @@
 
 ---
 
+## 2026-06-20 · 代理兜底（kdocs_sync v6.1）：绕 Shadowrocket TUN 直连 + launchd 多点 + 告警节流
+
+- **背景**：今天 12:00 自动同步全天失败、且无人知晓。复盘三个真 bug：① 撞上 Shadowrocket 隧道半死，连国内 `www.kdocs.cn` 都被 `SSLEOFError` 打断；② `poll_and_sync()` 靠进程内 `time.sleep(1800)` 轮询，MacBook Air 合盖睡眠时 sleep 跨睡眠不可靠 → 后续轮询全废；③ 进程睡死，18:00 的飞书告警也没发出。先手动 `update.sh` 补回了今天数据（pred 6/21 均价 370.4）。
+- **关键发现**：Shadowrocket 是 **TUN 隧道模式（虚拟网卡 + 网络层路由劫持）**，不是普通系统 HTTP 代理。陷阱9 的 `trust_env=False` / `--noproxy`（应用层绕过）对它**无效**——实测 `curl --noproxy "*"` 出口仍是美国。
+- **做了**（用户确认「探测 → 坏了先尝试绕过 → 绕不过再重试告警」+「2 轮失败才告警」）：
+  - **隧道探测**：`proxy_tunnel_healthy()`，经 `127.0.0.1:1082` 查 ip-api 出口是否 US（口径同 srmonitor）。
+  - **直连兜底**：`fetch_via_direct()` —— 公共 DNS（223.5.5.5 等）解析 kdocs 真实 IP + `curl --interface en0` 绑物理网卡发 POST，**流量从物理 Wi-Fi 出口走、彻底绕开 utun4 隧道，全程不碰 Shadowrocket**（避免与 Guardian 打架、不影响日常翻墙）。`--interface en0` 是必须的：否则系统会给真 IP 建 `真IP→utun4` 主机路由仍进隧道。已实测 POST 拿到 168 行。接进 `run_sync()`：正常通道失败且隧道坏才走兜底；隧道好（纯服务端 500）维持 FETCH_FAIL 交重试。
+  - **修轮询**：默认入口由 `poll_and_sync()` 改 `run_once_for_launchd()`（单轮，删 sleep 循环）；`com.gdpower.update.plist` 单点 12:00 → **12–17 点 6 个 `StartCalendarInterval`**，睡眠错过点 macOS 醒来补跑。旧轮询保留为 `--poll`。
+  - **告警节流**：跨进程按日状态文件 `~/gdpower/.sync_state_<date>.json`（原子写），连续 `ALERT_THRESHOLD=2` 轮失败才推一次飞书（含「广东电力」关键词），避免代理短暂抽风虚惊；恢复时附一条「已恢复」。
+- **验证**：隧道探测 US✅、en0 直连绕隧道拿 168 行✅、告警节流（第2轮才推、仅1条、含「广东电力」）✅、好日子短路秒退✅、全程出口仍 US / Shadowrocket 未被碰✅、py_compile + plutil + launchctl 6 点登记✅。
+- **改动文件**：`kdocs_sync.py`(v6.1，+subprocess、+探测/直连/状态/单轮入口、改 run_sync 与 __main__)、`com.gdpower.update.plist`(多点)。均已备份 `*.bak_20260620_214534`。
+- **范围外（待后续）**：Mac mini（13:00 老逻辑）、外部 `gd_price_forecast_pkg`（22:30/23:30，token 明文）有同样 TUN 隐患，本期未动。
+- **坑/备注**：TUN 模式下应用层绕代理无效，必须 `--interface en0` 绑卡 + 公共 DNS 真 IP；CDN 多 IP 会轮换不可硬编码、保持证书校验（勿加 `-k`）；笔记本 `time.sleep` 跨睡眠不可靠，定时轮询应交 launchd 多点而非进程内 sleep。
+
+---
+
 ## 2026-06-17 · 手动补发 6/16 预测图 + 对比图到飞书
 
 - **做了**：应要求手动生成并推送 6/16 两张图到飞书群——`notify_prediction.py --date 2026-06-16`（日前电价预测 24 点折线图 + 数据表）、`notify_compare.py --date 2026-06-16`（日前预测 vs 实际对比折线图 + 数据表），各一条 post 带双图，退出码均 0。
