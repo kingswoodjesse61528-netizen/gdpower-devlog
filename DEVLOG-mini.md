@@ -13,6 +13,21 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-06-20 · [mini] 发图加上传重试，根治偶发掉图
+
+- **任务**：今天群里收到「金山同步成功」文字，但**没收到日前预测折线图**。排查原因并加固。
+- **根因**：今天金山数据晚到，轮询到第 11 次 16:43 才成功；紧接着 16:44 `notify_prediction.py` 发图时，
+  `open.feishu.cn` 连续 SSLEOFError（换 token + 上传图各失败一次），`_feishu_upload_image` 无重试直接返回 None，
+  脚本按设计**降级成纯文本表**发出 → 群里有字无图。20 秒后网络恢复，对比图(16:44:22)反而发成功。纯偶发网络抖动（CLAUDE.md 已记此为已知问题），数据本身正常。
+- **当天处置**：手动 `notify_prediction.py --date 2026-06-21` 补发成功（图+表一条 post）。
+- **加固（本次改动）**：给 `kdocs_sync.py` 的 `_feishu_upload_image` 加「换 token + 上传」整体重试循环：
+  最多 3 轮、退避 5s/15s，每轮重新换 token，全失败才返回 None 降级。一处改动，预测图 + 对比图（共 4 处调用）全部受益。
+- **验证**：py_compile 通过；真实调用 `_feishu_upload_image` 正常路径仍秒回 image_key（仅上传不发群）；gdpower 与 WORK_DIR 两份 diff 一致。
+- **状态**：完成并验证。
+- **改动文件**：`kdocs_sync.py`（gdpower + WORK_DIR 双副本）；备份 `kdocs_sync.py.bak_20260620_173111`。
+- **下一步**：① 观察明天 11:10 定时跑是否正常带图；② 可选：把同样的重试思路用到 `_feishu_tenant_token` 单独调用处（读群 fail-open 不致命，优先级低）；③ Air 备机的 `_feishu_upload_image` 若是同源可一并同步此重试。
+- **坑/备注**：① 重试只兜「上传/换 token」的网络抖动，webhook 文字推送(`_feishu_send`)未含此重试；② 探针技巧：上传图只拿 image_key 不发群，可当飞书发图连通性探针，不污染群。
+
 ## 2026-06-16 · [mini] 双机主备去重 + 自动故障切换（mini 转 primary，全功能上线）
 
 - **任务**：mini 部署预测推送后会和 Air 推同一飞书群、一部手机收两条；要求「互为主备 + 一台挂了另一台自动顶上」
