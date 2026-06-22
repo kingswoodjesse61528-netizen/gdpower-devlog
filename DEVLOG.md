@@ -13,6 +13,22 @@
 
 ---
 
+## 2026-06-23 · 补「评判器闭环」：模型退化自动告警 + 条件触发重训（上线仍人工）
+
+- **背景**：用「循环工程(五动作×六零件)」审查这套自动化——调度/发现/持久化/视野/交付五格都到位，**唯独缺「验证」那格的执行端**。系统每天 `calc_accuracy()` 拿次日真值回测算 MAE（强 ground-truth 检查），但命中阈值此前**只 `log.warning` 不动作**：误差攒在 `accuracy.csv` 没人盯，**6/19、6/22 两天 MAE 飙到 200+ 都没主动喊人**。典型「验证债」——有测量、没评判器闭环。
+- **目标**（用户确认范围=「告警 + 条件触发重训」）：把「测量」接到「动作」。**P0 退化自动告警**(自动)、**P1 条件触发重训出候选**(自动)、**上线仍人工把关**(守住循环工程要求的人工卡点)。
+- **做了**：
+  - **P0 告警 `kdocs_sync.py::calc_accuracy()`**：新增 `notify_quality()` + `_recent_mae_mean()`。单日 MAE≥`DEGRADE_MAE`(70)→推「模型退化」；无退化但近 3 日均值>`WATCH_ROLL3`(55)→推「模型注意」。复用 `_feishu_push`+`should_push` 主备去重，文案含「广东电力」过机器人关键词。去重靠 `existing_dates`（同日只算一次）+ `should_push`（双机）。
+  - **`retrain_model.py` 加两个加性 CLI**（默认手动用法字节不变）：`--test-start DATE` 覆盖 `TEST_START_DATE`（破「假重训陷阱」让新数据进训练集）；`--stage` 把候选只写 `staged_models/<ts>/`、**绝不碰 serving 目录**。打印机读标记 `TRAIN_END=` / `STAGED_DIR=`。meta 构建上提供两路复用。
+  - **P1 闭环 `tools/verify_sync.py::auto_retrain_check()`**：近 7 日 MAE 均值>`RETRAIN_MAE_THRESHOLD`(70) → 先 `--dry-run --test-start today-7` **校验 TRAIN_END 真推进**(≤10 天内，否则疑似假重训→推「需人工介入」中止) → 再 `--stage` 出候选 → 推「候选就绪，待人工 curl /model_info 后上线」。三道护栏:`AUTO_RETRAIN_ENABLED` 仅主力机开(双机去重)、`RETRAIN_COOLDOWN_DAYS`(5) 冷却期、候选绝不自动上线。
+- **关键安全点**：update.sh 每日 Step2 重启 API 会加载 serving 目录里的模型——所以候选**必须**暂存在 serving 之外，否则次日静默自动上线。已实测 `--stage` 后 serving+主 models 目录 mtime 指纹**完全一致**(byte-for-byte 未动)。
+- **验证**：P0 三场景(退化/注意/正常)+去重 ✅；retrain 默认 dry-run 暴露 TRAIN_END=2026-04-03 假重训陷阱 ✅；`--stage --test-start` 推进到 06-15 且 serving 未被触碰、候选完整(xgb/lgb/meta) ✅；P1 编排 5 场景(阈下不动/假重训中止/出候选/冷却期/非主力机) 全 mock 通过 ✅。三脚本 `py_compile` 均 OK。
+- **改动文件**：`kdocs_sync.py`、`retrain_model.py`、`tools/verify_sync.py`、`.secrets.json.example`(新增 4 个可选键)。备份 `*.bak_20260622_235231`。
+- **部署姿态**：P0 告警**改完即生效**（无需配置）。P1 自动重训**默认休眠**(`.secrets.json` 无 `AUTO_RETRAIN_ENABLED` → false)，**待用户在主力机一台显式开启**。两机当前都不会自动重训，安全。
+- **坑/待办**：① 自动重训默认关，要用须在【主力机一台】`.secrets.json` 加 `"AUTO_RETRAIN_ENABLED": true`，**切勿两台都开**(抢写模型目录)。② dry-run 也会真训练(只是不保存)，故条件重训会训两次(dry+stage)——冷却期 5 天内最多一次，可接受。③ promote 上线仍手工：`cp staged_models/<ts>/*.pkl <serving>/models/` + 重启 API + `curl /model_info` 验 `trained_at`。④ `staged_models/` 未加自动清理，候选会累积，后续可加按时间清。
+
+---
+
 ## 2026-06-20(续) · PWA 双机互备 + 健康告警：去掉「仅 Air 发」单点
 
 - **背景**：PWA 发布是单点故障——`update.sh:141` 用 `if [[ "$(whoami)" == "hydtzyj" ]]` 网关，**只有 Air 发 PWA**，mini 只同步预测从不发。Air 宕机/断网 → 手机 PWA 永远停更且无人知。两机原本是「伪互备」（数据各算各、仅飞书群去重、无故障接管）。
