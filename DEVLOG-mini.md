@@ -13,6 +13,64 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-06-25 · [mini] 模型重训（修全量 refit 漏洞）+ 退化判据改近3日滚动
+
+- **任务**：accuracy.csv 显示重训后劣化（近7日均 MAE=124.7、MAPE 48.5%、5/7 天 🔴），判定需重训。
+- **发现并修一个 refit 漏洞**：`retrain_model.py` 把 `TEST_START_DATE` 设成 `2026-04-04`，
+  保存的却是 `.fit(X_train)`（只训练到 04-03）的模型——**部署模型数据覆盖反比上一版（训到 05-21）更旧**，
+  最近闹退化的新工况全被划进测试集、没进训练。test MAE=39.48 是 teacher-forcing（喂真实滞后价）严重低估生产误差，别误信。
+  - **修法**：保存前用 `sklearn.base.clone` 复制同套超参，在**全量数据（截至 06-25，12792 行）重拟合**一份生产模型再落盘；
+    评估指标仍用 train-only 模型产出，保持诚实。meta 新增 `prod_full_refit`/`prod_train_period`。
+  - 重跑后生产模型训练覆盖 `2025-01-08 ~ 2026-06-25`；旧模型备份 `models/v2_backup/20260625_123549`；
+    主目录与 API 加载目录 diff 一致；`install_service.sh restart` 已重启，`api_check.sh` 五端点全 200。
+- **退化判据改近3日滚动**：`tools/verify_sync.py` 原单日 MAE≥70 判退化，易被离群点（如 06-19 实际价近零致 MAPE=209%）误触发。
+  - `_latest_accuracy()` 多返回 `mae3`（近3日含当日 MAE 均值）；`_quality_block()` 改用 `mae3` 判 🔴/🟡/🟢，
+    推送文案展示「当日 MAE/MAPE ｜ 近3日均 MAE」。阈值不变（≥70 退化 / 50–70 注意 / <70 正常）。
+  - 实测当日输出：`🔴 模型退化  当日 MAE=109.75 ｜ MAPE=19.07% ｜ 近3日均 MAE=93.43`（仍 🔴，因这3天是老模型预测；新模型从明天起计入会回落）。
+- **状态**：完成并验证。
+- **改动文件**：`retrain_model.py`、`tools/verify_sync.py`（均 `.bak_*` 备份）、`CLAUDE.md`、`DEVLOG-mini.md`；模型 pkl/meta 已更新并同步 API 目录。
+- **下一步**：盯 2–3 天 accuracy.csv——回到 MAE<50 说明重训见效；仍频繁 🔴 则非数据陈旧，需查特征或市场结构性变化（如西电断供类外生事件需加特征）。
+  Air 端 `verify_sync.py` 若也跑，需同步这版判据改动。
+
+## 2026-06-22 · [mini] 给 loop 补上「会说不的评判器」+ 堵静默失败链（P0–P3）
+
+- **任务**：用 loop-engineering「五动作×六零件」审查整套自动化，发现唯一缺的零件是**验证那格**——
+  11:30 的 `verify_sync.py` 只查「文件在不在」，是假评判器；真正的质量对标 `calc_accuracy()`（昨日预测 vs 实际，MAE≥70 判退化）
+  存在但**只写日志、不告警**，核对消息也不读它。于是会出现「✅ 同步正常，但预测其实已退化没人知道」。
+- **做了什么（P0–P3 四项）**：
+  - **P0（核心缺件）** `tools/verify_sync.py`：新增 `_latest_accuracy()`（读 `accuracy.csv` 按日期取最新 MAE/MAPE）
+    + `_quality_block()`（MAE≥70 🔴退化 / 50–70 🟡注意 / <70 🟢正常，阈值与 `calc_accuracy` 一致）。
+    *（2026-06-25 更新：判据由单日改为近3日滚动均值 MAE，防离群点误触发，见顶部条目。）*
+    11:30 核对消息新增一行准确率红绿灯；**同步/预测都正常但 MAE≥70 时，标题从 ✅ 降级为 🔴「同步正常但模型退化」**，并附复查建议。
+  - **P1（Critical 静默链）** `update.sh`：新增 `alert()` 函数（复用 `kdocs_sync._feishu_push`）；
+    Step 2 API 启动超时 `exit 1` 前先推飞书告警——此前只会收到 Step 1 的「金山同步成功」，预测/推图/备份全被跳过却无人知。
+  - **P2** `update.sh`：`predict_archive.py` 原为裸调用、失败静默吞掉，改为失败即 `err`+`alert`（仍继续跑备份，不中断）。
+  - **P3** `kdocs_sync.py`：`check_token_expiry()` 在令牌已过期时 `notify_failure()` 告警 + `sys.exit(2)`，
+    砍掉「过期后仍轮询到 18:00 才报」的静默窗口。
+- **保留人工复核点**：P0 的 🔴 只告警，不自动停 loop、不自动重训——是否因退化干预由人定（执行可外包，拿主意不行）。
+- **复用而非新增**：全程复用现成 `_feishu_push`/`notify_failure`/`should_push`/`MACHINE` + `accuracy.csv`，未加新服务/新 launchd job/新依赖。
+- **验证**：`update.sh` 过 `bash -n`；`verify_sync.py`/`kdocs_sync.py` 过 `py_compile`；
+  **干跑 verify 新逻辑实测**：同一状态下，旧逻辑推「✅ 同步核对正常」，新逻辑推「🔴 同步正常但模型退化  MAE=207.15 元/MWh ｜ MAPE=31.15%」（未真发飞书，避免群内重复）。
+- **状态**：完成并验证。
+- **改动文件**：`tools/verify_sync.py`、`update.sh`、`kdocs_sync.py`（gdpower 权威副本 + WORK_DIR 冗余副本，diff 一致）。
+  备份均为 `.bak_20260622_125644`（三处 + WORK_DIR 一处）。
+- **⚠️ Air 端待生效（mini 够不到 Air，请在 Air 本地手动同步）**：
+  1. **P3 的 `check_token_expiry`**（机器无关，照搬）：在 Air 的 `~/gdpower/kdocs_sync.py`（若 WORK_DIR 也有副本则一并改）里，
+     把 `days_left < 0` 分支末尾补上告警+退出——在 `log.error('=' * 52)`（过期分支最后一行）之后插入：
+     ```python
+             try:
+                 notify_failure('AirScript 令牌已于 ' + str(TOKEN_EXPIRY) +
+                                ' 过期，今日数据同步必然失败。请在金山脚本编辑器续期并更新 .secrets.json。')
+             except Exception as _e:
+                 log.error('过期告警推送失败：' + str(_e))
+             sys.exit(2)
+     ```
+  2. **P0 的 verify_sync 红绿灯 / P1·P2 的 update.sh 告警**：Air 若也跑 `verify_sync.py` 与 `update.sh`，建议一并移植
+     （逻辑机器无关，仅路径/用户名 `hydtzyj` 不同）；可从 mini 这三个文件直接参照。
+  - 改前先 `cp ...bak_$(date +%Y%m%d_%H%M%S)`，改后 `py_compile` + `diff` 两副本确认一致。
+- **关联文档**：完整审查报告与 loop-engineering 框架笔记已存入 Obsidian「电力市场」仓库
+  （`gdpower自动化审查-缺会说不的评判器-20260622.md`、`loop-engineering循环工程-框架讲解.md`）。
+
 ## 2026-06-20 · [mini] 发图加上传重试，根治偶发掉图
 
 - **任务**：今天群里收到「金山同步成功」文字，但**没收到日前预测折线图**。排查原因并加固。
