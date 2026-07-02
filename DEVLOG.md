@@ -13,6 +13,25 @@
 
 ---
 
+## 2026-07-02 · 路线A第一批：每日自动重训(门槛自动上线) + rMAE/sMAPE 监控
+
+- **背景**：精读论文 Aliyon & Ritvanen《Deep learning-based electricity price forecasting》(Energy 2024)——核心制度=每日滚动重训+rMAE 相对基准评估，「误差的敌人不是波动，是陈旧」。本系统 6/25 事故（陈旧 18 天 MAE 37→123）正是论文结论的实盘验证。方案笔记在 Obsidian `2026-07-02-gdpower每日自动重训与rMAE监控改造方案.md`。
+- **做了**：
+  - **accuracy.csv 扩 8 列**（+naive_mae/rmae/smape），`tools/backfill_rmae.py` 回填历史 60 行+**重建 07-01**（6/30 同步失败无存档，serving 模型 out-of-sample 重算，MAE 19.3——此行是重建值非生产值）+整表排序（P2 待办闭环）。手算 3 处交叉核验一致。
+  - **calc_accuracy**：每日算三个新指标；写入后 `_sort_accuracy_csv()` 整表排序；**rMAE 预警**（最近 3 条非空且 7 天内全 >0.9 → 飞书，`RMAE_WATCH=0.9`）。
+  - **retrain_model.evaluate() 加 sMAPE**（分母合计下限 1 元，负价安全），meta 自动携带。
+  - **backtest.py 参数化**：`--model-dir/--output/--quiet` + 每日结果带 `naive_mae`（rMAE 护栏数据源），默认行为不变。
+  - **`tools/daily_retrain.py`**（launchd `com.gdpower.dailyretrain` 每日 18:00）：GATE→PRECHECK→STAGE①(留30天评估)→COMPARE→DECIDE→STAGE②(全量留2天)→PROMOTE→VERIFY，失败 ROLLBACK。两段式=「交叉验证选方案、全量出成品」，上线工件训练集只滞后 3 天。开关 `DAILY_RETRAIN_ENABLED`（.secrets.json，Air 已开）。
+  - **消费端透传**：`/accuracy`（records+`avg_rmae_7`，空值安全转 None）、export_snapshot→PWA data.json。
+- **门槛设计的实测教训（重要）**：初版「全窗对比+1.05 容差」实测被泄漏打爆——旧模型在其训练集内日期占 **1.578 倍**便宜（泄漏段 16.64 vs 26.26），公平段其实打平（34.41 vs 34.98，比值 1.017）；且每日 promote 稳态下泄漏段会占满全窗→门槛变永久拒绝机。**改为两级**：公平段（交集中晚于旧模型 train_end）≥7 天→公平段对比；否则→候选全窗回测 vs 生产实际 MAE（accuracy.csv 同窗）。护栏 rMAE≥1 一票否决不变。
+- **验证**：全链路真跑一次成功——候选公平段 34.98 vs 34.41(×1.05 内)+rMAE 0.447→promote→API `trained_at=2026-07-02T22:58:23`（独立 curl 复核）→训练集 6/15→6/29（陈旧 17 天→3 天）；4 个辅助 pkl 未动（时间戳佐证）；幂等（当日 done 静默退出）、开关缺省静默、--dry-decide 观察模式、rMAE 告警链路（临时阈值 0.1 逼真推）全过；plutil/py_compile 全绿。
+- **改动文件**：`kdocs_sync.py` `retrain_model.py` `backtest.py` `api_server.py` `tools/export_snapshot.py`（均 `.bak_20260702_223826`）；新建 `tools/daily_retrain.py` `tools/backfill_rmae.py` `com.gdpower.dailyretrain.plist` `MINI_DAILY_RETRAIN.md`；`.secrets.json`(+3 键) `.secrets.json.example` 同步。
+- **上线时实况**：近 7 日生产 avg_rmae_7=1.087（模型没跑赢 naive）、serving 陈旧 17 天——正在重演 6/25 前夜的模式，本次上线即刻纠正。
+- **下一步**：连看 3 天 18:00 日志+飞书；第 2 天临时 TOL=0.5 逼 REJECT 分支验证；mini 按 `MINI_DAILY_RETRAIN.md` 部署（rMAE 监控必上，重训开关自定）；第二批=特征改造（节假日/煤价/lag72）+Optuna。
+- **坑**：① 群里 22:48 的「rMAE预警」是测试消息（阈值临时 0.1），忽略。② accuracy.csv 07-01 行是重建值。③ staged_models/ 每日 +2 个目录（评估+全量），未加清理，累积待清（老 P3 待办升级）。④ update.sh 每日 Step2 重启 API 会加载 serving——promote 已直接写 serving，语义一致无冲突。⑤ 门槛对比用回测口径（真实历史特征），与生产口径（D-1 预报特征）系统性偏低约 2 倍，跨口径比较时注意。
+
+---
+
 ## 2026-06-23 · 补「评判器闭环」：模型退化自动告警 + 条件触发重训（上线仍人工）
 
 - **背景**：用「循环工程(五动作×六零件)」审查这套自动化——调度/发现/持久化/视野/交付五格都到位，**唯独缺「验证」那格的执行端**。系统每天 `calc_accuracy()` 拿次日真值回测算 MAE（强 ground-truth 检查），但命中阈值此前**只 `log.warning` 不动作**：误差攒在 `accuracy.csv` 没人盯，**6/19、6/22 两天 MAE 飙到 200+ 都没主动喊人**。典型「验证债」——有测量、没评判器闭环。
