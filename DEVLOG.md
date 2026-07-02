@@ -13,6 +13,19 @@
 
 ---
 
+## 2026-07-03 · 路线A第二批：特征改造(38列) + Optuna 超参重搜（含两个诚实负结果）
+
+- **背景**：接第一批（每日重训+rMAE），补论文方法论另两块——广东本地化特征（论文欧洲气价→广东煤价）+ 系统性调参（论文「年度重调超参」）。
+- **架构**：特征契约从「三处硬编码」升级为「**meta 驱动切片 + 冻结兜底**」。演进源=retrain_model.FEATURE_COLS，写进 meta；api_server（`_active_feature_cols()`）/backtest（读 --model-dir 的 meta）按所加载模型的 feature_cols 切列，35 列字面量降为极老模型 fallback。红利：**特征回退零成本 + daily_retrain.py 一行没改就跨代际公平对比**。辅助模型（weighted/负价）用冻结的 `FEATURE_COLS_AUX`(45) 彻底解耦。新特征唯一实现在 `features_ext.py`（backtest.is_holiday 也委托它）。
+- **⚠ 负结果1：煤价被数据否决**。原计划 5 新特征（+煤价 2 列）。多窗口消融（3×30 天 out-of-sample）实测：base35=36.89，+lag72+holiday(38列)=36.55(**+0.9%,三窗一致**)，**+coal=37.51(-1.7%)**，all40=38.08(-3.2%)。煤价在日前小时级预测是噪声（训练窗煤价变动小、传导被负荷/西电/新能源吸收、煤电边际定价是周/月级慢变量与日内波动不匹配）。**用户决策去煤价**→定稿 38 列（35+price_lag72+is_holiday_cal+days_from_cny）。简化红利：3 列全是 CSV 纯函数无外部依赖→煤价的 strict fail-loud/ext_defaults/mtime 缓存风险全消。煤价管道保留供可预测性研究（coal_features_for_research），不进模型、未挂 launchd。
+- **⚠ 负结果2：Optuna 调参不落盘**。tune_hyperparams.py（3 折时序 CV + 14 天不可见终检窗，best 不劣才落盘）150 trials：best CV 赢默认 5.4%(36.375 vs 38.449)，**终检窗劣于默认 1.9%(37.676 vs 36.576)** → 守卫拒绝落盘。**v3.1 手调超参本已很好**，调参无免费午餐；终检窗是唯一挡住劣质参数的防线。retrain 读 tuned_params.json 存在才用，现不存在→内置默认；回滚=删文件。
+- **验证**：backtest 老模型逐日 MAE 回归**完全一致**（meta 切 35=改前）；api_server 改造后同 payload /predict **逐字段一致**（备份+还原了预测存档，负价路径 45 列 AUX 不崩）；38 列候选/35 列 serving 各按 meta 切片可回测（COMPARE 链路通）；干净 A/B 证 38>35 +0.9%；5 新→3 特征重要性 price_lag72 排第 10。
+- **上线**：38 列模型手动经 daily_retrain.promote() 上线（07:41，trained_at 已验、feature_count=38）——GATE 因当日金山数据未到（12:00 才同步）拦自动路径，故有人值守手动 promote，复用 daily_retrain 已测 promote（备份/双目录/现代重启/trained_at 精确验证）。清了 state 让今晚 18:00 正常跑。
+- **改动文件**：新建 `features_ext.py` `tools/update_coal_price.py` `tools/tune_hyperparams.py`；改 `api_server.py`（meta 切片+AUX+ext特征）`retrain_model.py`（FEATURE_COLS 38+tuned读取+meta 增 hyperparams_source/ext_defaults）`backtest.py`（meta 切片+is_holiday 委托）；`.bak_20260702_232343`。装 optuna 4.9.0。
+- **坑/待办**：① `features_ext.HOLIDAYS` **2027 是预填，2026-11 国务院发文后校对**；② 煤价管道无 launchd（手动跑）；③ Optuna 的 recent_window_days（解 RECENT_WEIGHT_START 钝化）随整体不落盘未采纳，钝化仍待解；④ staged_models/ 累积未清（老 P3）；⑤ mini 第二批未部署（清单已标注）。
+
+---
+
 ## 2026-07-02 · 路线A第一批：每日自动重训(门槛自动上线) + rMAE/sMAPE 监控
 
 - **背景**：精读论文 Aliyon & Ritvanen《Deep learning-based electricity price forecasting》(Energy 2024)——核心制度=每日滚动重训+rMAE 相对基准评估，「误差的敌人不是波动，是陈旧」。本系统 6/25 事故（陈旧 18 天 MAE 37→123）正是论文结论的实盘验证。方案笔记在 Obsidian `2026-07-02-gdpower每日自动重训与rMAE监控改造方案.md`。
