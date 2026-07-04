@@ -13,6 +13,31 @@
 
 ---
 
+## 2026-07-03 · 双机部署准备：Path.home 路径重构 + 每日重训飞书主备去重
+
+- **背景**：mini 要与 Air 同样部署(两批全上)。核心矛盾=两机共用一个 git 仓但代码硬编码 `/Users/hydtzyj`(mini 是 zhouyijun)——**可移植性债**,每次同步都要 sed 搏斗。用户拍板:两台都开每日重训 + 现在就做 Path.home 重构一劳永逸 + 顺手飞书去重。
+- **Path.home 重构**：全仓 17 个 .py 的硬编码 `/Users/hydtzyj/...` 改为 `Path.home() / ...` 动态推导(含之前遗漏的生产链路 notify_prediction/notify_compare,和 predict_tomorrow/analyze_april/backfill_* 等离线工具)。两机共用一份代码、**git pull 即用、无需 sed**。plist 是 XML 例外,装载时用 `$HOME` 适配一次。
+- **回归验证(Air 零回归)**：① `git diff HEAD` 证明核心文件(backtest/api_server/retrain/features_ext/kdocs_sync)除路径行外**无任何逻辑改动**;② 路径解析 assert 逐字一致(`Path.home()/'gdpower'` 在 Air 上 == 原硬编码);③ 全部 py_compile + import 成功。Path.home 是确定性等价替换,未重启 API(用户不想扰动 serving,靠静态三证据足够)。
+- **飞书主备去重**：`daily_retrain.feishu()` 加 `dedup` 参数。「✅ 已自动上线」成功通报走 `ks.should_push`(primary=mini 推了 backup=Air 就跳)→ 两台都开每晚也**只一份成功通报**;异常/回滚/门槛拒绝仍两台都推(各自问题都要看见)。
+- **DM 检验(用户另一会话加,本次一并 push)**：`tools/dm_test.py`(85 行)+ daily_retrain 集成 Diebold-Mariano 检验,判断候选 vs 基准逐日误差差异是否统计显著,**观察态只报告不否决 promote**。import 已验证可跑。补上了「真实收益只认 out-of-sample」缺的统计显著性判断。
+- **mini 部署清单**：`MINI_FULL_DEPLOY.md` 大幅简化——第 3 步从「全局 sed 改路径」变成「路径检查(通常无需操作)」;第 9 步重训开关定 True + 飞书去重说明;第 10 步 plist 用 $HOME 适配。
+- **改动文件**：17 个 .py(路径)+ daily_retrain(去重)+ dm_test.py(新)+ MINI_FULL_DEPLOY/CLAUDE/DEVLOG。**不推模型/数据/密钥**。
+- **待办**：mini 执行 `MINI_FULL_DEPLOY.md`;今晚 18:00 Air 每日重训会用新代码(Path.home + DM 观察态 + 飞书去重)自动跑,留意日志。
+
+---
+
+## 2026-07-04 · 路线A第三批：DM(Diebold-Mariano)检验接入 promote 门槛（观察态）
+
+- **背景**：07-03 的「手调 vs Optuna 谁更好」之争暴露一个缺口——promote 门槛用「候选 MAE ≤ serving×1.05 容差」判上线，但对比窗口可能短到 <7 天，**MAE 略低分不清是真进步还是抽样运气**。依据 2026-07-04 的 deep-research 核实报告《中国省级现货电价预测建模》（欧洲 Weron/Lago 方法论在中国适配性，存于「工作」vault/Claude/），补 DM 检验这把统计显著性尺子（该报告另给 asinh 变换、QRA 概率头两个待落地方向）。
+- **做了什么**：① 新 `tools/dm_test.py`——Diebold-Mariano 统计量 + Newey-West HAC 方差（滞后 h-1，处理电价误差自相关，防低估不确定性/高估显著性）+ Harvey-Leybourne-Newbold 小样本校正（t 分布而非正态，短窗口更保守）。符号约定 **正=候选(A)损失更大(更差)**。含 `dm_on_dates(new_mae, ref_mae, dates)` 按日期配对封装（缺失日跳过、<2 天无结论）。② **纯观察态**接入 `daily_retrain.compare_windows`：在决策同窗（fair 段或 prod 全窗）用**逐日 MAE** 跑 DM，dm_stat/dm_p/dm_n 加进返回 dict + 飞书报告 + state。`_prod_mae` 改为增返逐日映射（prod 模式 DM 需要）。main() 加一行 DM 解读（显著更好✅/显著更差⚠️/不显著/样本不足四分支）。
+- **⚠ 安全设计**：DM **完全不进入 `passed`/`verdict`**——`passed = (not guard_fail) and (mae_new <= mae_ref*TOLERANCE)` 一字未动。哪怕 DM 有 bug，最坏只是飞书多一行错话，**绝不误 promote/误否决**。先让新信号「只说话不投票」，观察靠谱后再给投票权。
+- **状态/验证**：TDD 全程（先红后绿）。`tests/test_dm_test.py`(9：识别相同/对称抵消/A更差符号正/B更差符号负/样本不足/多步 h 更保守 + dm_on_dates 配对/跳缺失/少样本) + `tests/test_compare_windows_dm.py`(2 集成：monkeypatch JSON 路径喂合成回测，**不触发训练/网络**，验证 fair 模式返回 DM 字段、符号、公平段天数) 全绿；飞书四分支渲染（含 inf 边界）已验。py_compile 通过。**gdpower env 无 pytest → 用纯 assert 脚本 + env python 跑**（未污染环境）。**仅离线验证，尚未在真实每日重训里跑过**（需当日数据就绪+会真训练候选）。
+- **改动文件**：新建 `tools/dm_test.py` `tests/test_dm_test.py` `tests/test_compare_windows_dm.py`；改 `tools/daily_retrain.py`（import dm_on_dates + `_prod_mae` 增返逐日映射 + `compare_windows` 算 DM + main 报告加 DM 行 + state 存 dm）。
+- **下一步**：① 今晚 18:00 定时或手动 `--dry-decide` 看第一条**活体 DM 输出**→确认靠谱；② 翻**硬门槛**（候选 dm_stat>0 且 dm_p<0.05 → 一票否决）；③ 做 **naive 基线修正**：现 `backfill_rmae.py`/`backtest.py` 的 naive 一律用 D-1（p_{d-1,h}），应改 **day-of-week 依赖**（工作日周二–周五用 p_{d-1,h}，周六–周一用 p_{d-7,h}，epftoolbox 口径），历史 accuracy.csv 用**方案 A 全量重算**；④ 更长线：asinh 变换、QRA 概率头。
+- **坑**：① 逐日粒度检验力弱于逐小时，短公平段（<7 天）DM 常给「不显著」——这是诚实信息（无证据换模型），不是 bug；要更强检验力再让 backtest 多存逐点误差（DM 函数不用改，只是喂的序列变细）。② mini 侧未部署此批。③ 尚未 push GitHub。
+
+---
+
 ## 2026-07-03 · 路线A第二批：特征改造(38列) + Optuna 超参重搜（含两个诚实负结果）
 
 - **背景**：接第一批（每日重训+rMAE），补论文方法论另两块——广东本地化特征（论文欧洲气价→广东煤价）+ 系统性调参（论文「年度重调超参」）。
