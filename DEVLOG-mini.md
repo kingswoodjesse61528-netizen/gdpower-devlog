@@ -13,6 +13,36 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-07-07 · [mini] 排查手机 PWA「预测滞后一天」+ 堵住让故障静默两天的三处漏洞
+
+- **任务**：用户反馈手机 PWA 电价预测数值滞后一天，排查根因并加固。
+- **根因（订正 Air 端 AI 的误判）**：**金山 WPS AirScript 接口风控间歇性拦截数据中心出口 IP → 403**，
+  不是 Token 撤销。铁证三条：① 同一 token 07-05 还成功取 168 行、07-07 排查时又通了并拉回 07/07 数据；
+  ② 不带 token GET 该端点返回 **404 而非 401**，说明那个 403 不是鉴权失败而是策略/风控性拒绝；
+  ③ 脚本自带「一遇 403 就探测出口国家」逻辑，07-06 日志实打实打了 `隧道出口探测：US`（本机出口落在美国 Oracle 机房 `150.136.229.66`）。
+  → 07-06 起金山数据没同步（mini `FETCH_FAIL`、Air 当天 12–17 点连 10 次 403），无新预测，PWA 冻结在
+  Air 07-05 12:01 发布的 `pred_date=2026-07-06`，用户 07-07 看就滞后一天。**别去重生成 Token（白折腾，新 token 从同一美国 IP 照样 403）。**
+- **同时查出三处「让故障静默两天没人知道」的漏洞并修**：
+  - **① 告警阈值太钝**：`kdocs_sync.py` `ALERT_THRESHOLD` 由 **2→1**。07-06 mini 失败到 `fail_count=1`、没达旧阈值 2 → 没推飞书，静默一天。
+    （**已 commit `cac56e2` 并 push origin/main**——共享代码，Air `git pull` 即同步。）
+  - **② PWA 发布单点押在备机**：mini（主机）`update.sh` 竟无发布步骤，`gdpower-pages` 全靠 Air 发；Air 一断当天就冻。
+    新增 **Step 3.6**：`export_snapshot.py --date $PRED_DATE` → `publish_pages.sh`（内建 `rebase -X ours` 双机互备，重复发布安全）。
+    （`update.sh` 走 `skip-worktree` 各机各存一份，**不入库**，改动已在 mini 磁盘生效，launchd 直接跑这份。）
+  - **③ mini 的 PWA 健康告警从未生效**：`com.gdpower.pwahealth` 根本没 load，且仓库 plist 脚本路径被 Air 误提交成 `/Users/hydtzyj/...`。
+    改成 mini 路径、装入 `~/Library/LaunchAgents/` 并 `launchctl bootstrap` 加载（每天 14:30 跑）；
+    并给它补 `skip-worktree`，对齐其余 4 个 plist（均 `S` + HEAD 存 Air canonical + 各机工作区自己路径）。
+- **当天已自愈**：11:10 mini 定时成功、Air 08:49/12:01 两次发布，远端 `data.json` 已到 `pred_date=2026-07-08`，手机刷新即恢复。
+- **验证**：`plutil -lint`/`bash -n`/`ast.parse` 三文件语法全绿；`kdocs_sync.py --test` 实拉回 07/07 数据；
+  `check_pwa_health.py` 实跑判「正常」不误报；`export_snapshot.py --date 2026-07-08` 实跑生成有效 data.json（24 点/准确率30条）；
+  `launchctl list` 见 `com.gdpower.pwahealth`。
+- **状态**：完成并验证。
+- **改动文件**：`kdocs_sync.py`（已提交 push）、`update.sh`（Step 3.6，本机 skip-worktree 不入库）、
+  `com.gdpower.pwahealth.plist`（mini 路径，已装 LaunchAgents + 补 skip-worktree）；备份 `*.bak_20260707_124327`。
+- **下一步 / 坑**：
+  - **根治靠改代理**：把梯子出口**固定到中国大陆/香港**节点——数据中心美国 IP 是风控盯上的直接诱因，出口一漂就会复发（本次只是恰好又进了放行窗口）。这步得人工在梯子客户端切，代码改不了。
+  - **Air 待办**：`cd ~/gdpower && git pull` 拿阈值 2→1。Air 的 `update.sh` 本就在发布（历史「仅 Air 发」那份），发布步骤它自己维护，无需从 mini 同步。
+  - **坑**：`update.sh` 与 5 个 plist 都是 `skip-worktree` 机器本地文件，HEAD 里存的是 Air（hydtzyj）路径；**别硬 commit mini 版**，会把仓库里 Air canonical 整份覆盖。实际生效的是磁盘/LaunchAgents 副本，不依赖 git。
+
 ## 2026-06-25 · [mini] 模型重训（修全量 refit 漏洞）+ 退化判据改近3日滚动
 
 - **任务**：accuracy.csv 显示重训后劣化（近7日均 MAE=124.7、MAPE 48.5%、5/7 天 🔴），判定需重训。
