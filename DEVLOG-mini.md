@@ -13,6 +13,23 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-07-08 · [mini] 为 lag1 修复配一次性复核（launchd 07-11，非云端）
+
+- **任务**：lag1 修复上线后，安排 07-11 自动复核真实线上效果并推飞书。
+- **为何不用云端 /schedule**：`/schedule` 起的是**云端 agent**，读不到 mini 本机的 WORK_DIR 模型/数据（`~/Documents/AI应用系统/...` 不在 git 仓库）
+  和 07-11 当天才同步的最新 `accuracy.csv` → 会用陈旧数据给错误结论。**此复核是本机任务**，故走 launchd（同 `com.gdpower.*` 机制）。
+- **做了什么**：
+  - `tools/review_lag1_fix.py`：对每个上线后（>=07-09）且实测就绪的日子做**同日三方对照**——部署(修复,取 accuracy 实测) vs
+    反事实 flat（同模型/同输入/同截断历史，仅把 `price_lag1` 塌回常数，复现旧行为）vs naive；输出「补丁净省」「赢 naive N/M」+ 自检
+    （用修复逻辑重建的 MAE≈实测 → 证明归档确实走了补丁）。同日对照把「当天行情难易」噪声约掉，比单看 MAE 高低可靠。
+  - `tools/review_lag1_notify.py` + `com.gdpower.reviewlag1.plist`（+ `~/Library/LaunchAgents/` 副本）：**07-11 09:00 一次性触发** →
+    跑复核 → 结论推飞书（`[mini]【广东电力预测·lag1修复复核】`，含关键词命中机器人）→ **自删 LaunchAgent**（先删 plist 再 bootout，真一次性、不年复一年残留）。
+- **状态**：✅ 已 `bootstrap` 加载，`state=not running`（待触发），日历 07-11 09:00 已确认；FEISHU_WEBHOOK 已配、plist 双副本一致。日志 `logs/reviewlag1.log`。
+- **改动文件**：新增 `tools/review_lag1_fix.py`、`tools/review_lag1_notify.py`、`com.gdpower.reviewlag1.plist`。
+- **下一步**：07-11 收飞书结论；也可 07-09 下午起手动 `python tools/review_lag1_fix.py`（不碰 launchd、可反复跑）。
+  提前取消：`launchctl bootout gui/$UID/com.gdpower.reviewlag1 && rm ~/Library/LaunchAgents/com.gdpower.reviewlag1.plist`。
+- **坑**：别对这个 notify 脚本做冒烟直跑——它结尾会自删 LaunchAgent，跑一次就把定时清了。要测复核逻辑请单跑 `review_lag1_fix.py`。
+
 ## 2026-07-08 · [mini] 定位并修复日前预测「晚高峰系统性压峰」根因：price_lag1 断裂
 
 - **起因**：查 gdpower 近三日 MAE 时发现 07-07 断档（归档漏跑），补齐后近三日均值抬到 61.6，
