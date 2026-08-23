@@ -11,6 +11,25 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-08-23（二）· backtest `--honest-lag` 并行观察上线：给日内 look-ahead 装上可对比的第二把尺
+
+- **背景**：接上一条。日内 look-ahead 已定位但没修——直接改默认口径的连锁反应太大（历史回测 MAE 会从 14 量级跳到 40 量级、所有历史数字作废，且 `daily_retrain` 的 prod 分支会从「必过」翻转、容差 1.05 极可能立刻变成天天拒绝，正是 07-02 想避免的失败模式）。本轮按「先并行观察、再切默认」的既有纪律（`QUANTILE_CI_ENABLED`、`tuned_params.json` 都是这么干的）加第二把尺。
+- **做了什么**：① `backtest.build_features_honest(df, target_date)`——把 target_date 及之后的电价置 NaN 再走**同一个** `build_features`（刻意复用而非另写「诚实版特征工程」，特征契约必须唯一，否则又是「三处重复」那个坑；屏蔽 + 下游 `.ffill()` 恰好复现生产的「lag 塌成 D−1 日 23 时单值」行为）。② `backtest.py --honest-lag` 开关，**默认关**；输出 JSON 加 `lag_mode: legacy|honest` 标记（两套数字要长期并存，必须能一眼分清是哪一套）。③ `daily_retrain.run_backtest(honest=)` + `honest_gap()`：COMPARE 后额外跑一遍诚实口径，把「候选 vs 生产实际」的 MAE 与比值记进 `.daily_retrain_state.json`（`honest_mae/honest_prod_mae/honest_ratio/honest_days`）和飞书卡片，**观察态、绝不参与 DECIDE**，整段包 try——观察器没有资格打断重训。
+- **⚠ 最容易做错的地方：只屏蔽「日前电价」，不能多屏蔽**。`price_lag24/48/168` 在报价时点**合法已知**（为 D+1 报价时，D 日的日前电价早在 D−1 就出清了）；`load_roll24_mean` 用的是**日前**统调负荷；日历/负荷派生（net_load、bid_space、load_mom_diff…）全不受影响。**屏蔽它们＝过度修正，会把模型打成瞎子**。这四条各写了一条回归测试正面守着，不是靠注释提醒。
+- **首轮实测（30 天，同一候选 `staged_models/20260822_180011`、同一生产基准 accuracy.csv 同窗）**：
+  ```
+  口径      候选 MAE   生产实际 MAE   比值     门槛(×1.05)
+  legacy     13.33       50.69       0.263      通过
+  honest     39.94       50.69       0.788      通过
+  ```
+  **好消息：修了泄漏门槛也不会立刻变「天天拒绝」**——0.788 距 1.05 仍有余量，07-02 担心的失败模式暂未出现。耗时 0.94s → 2.30s，可忽略。
+- **⚠ 但 0.788 仍然偏乐观**：honest-lag 只修掉三重不对称里的**一重**，另两重仍在——① 训练集含被回测日期（跨日泄漏）；② backtest 用**真实**日前负荷/气象，而生产走 `build_tomorrow_rows()` 从 `/defaults` **插值估算**。真实 out-of-sample 比值会更接近 1。**切默认前必须攒够观察数据，别拿 0.788 当结论。**
+- **切默认的判据（写死在 CLAUDE.md，免得日后忘）**：观察一到两周——`honest_ratio` 稳定 < 0.9 → 可切默认且保持容差 1.05；常态逼近或超过 1.0 → 说明那 3.8 倍优势基本是泄漏撑的，**切默认的同时必须重设容差**，否则从「永久通过机」翻转成「永久拒绝机」。
+- **状态**：✅ 已上线 Air（观察态）。`tests/test_honest_lag.py` 9 项 + `tests/test_honest_observation.py` 8 项全绿，全量 **39 项**回归全绿。**默认路径零行为变化已逐日字节级验证**（改动前后 legacy 口径 30 天 MAE 逐日比对，不一致天数 = 0）。集成路径已用真实 staged 模型冒烟跑通（`run_backtest(honest=True)` → `honest_gap` → `{'mae_honest': 39.94, 'mae_prod': 50.69, 'ratio': 0.788, 'n_days': 30}`）。今晚 18:00 的 launchd 任务是第一次真实端到端运行。
+- **改动文件**：`backtest.py`（+`build_features_honest` / +`--honest-lag` / 日循环按开关取 X / 输出加 `lag_mode`）、`tools/daily_retrain.py`（+`CMP_HONEST_JSON` / `run_backtest(honest=)` / +`honest_gap()` / COMPARE 后观察段 / 飞书卡片加 honest 行）、新建 `tests/test_honest_lag.py`、新建 `tests/test_honest_observation.py`、`CLAUDE.md`（新增一节）。
+- **下一步**：① 攒 1–2 周 `honest_ratio` 观察数据再决定切默认与容差；② mini 侧 `git pull` 后同样进入观察态（两机各自记录）；③ 修完 backtest 口径后**重跑 08-02 的分位 vs 启发式三窗口验证**——原实验设计无误，只是地基被污染，结论可能反转；④ conformal 偏移量接进每日滚动重算。
+- **坑**：① 屏蔽帧里目标日的「日前电价」已是 NaN，**实际值必须从未屏蔽的帧取**，否则 ground truth 会变成 NaN——日循环里 `actual`/`日前西电` 仍走 `day_df`，只有 `X` 走屏蔽帧。② `honest_gap` 的入参是「生产实际 MAE 映射」而不是路径，为的是可单测；`_prod_mae` 返回三元组 `(mean, n, map)`，取第三个。③ 逐日重建特征看着像 O(n²)，实测 30 天只从 0.94s 涨到 2.30s，别为此提前优化去手写「只补价格列」的快路径——那正是特征契约分叉的开始。
+
 ## 2026-08-23 · 论文改造核验 → 追出两重问题：区间覆盖率长期失真（已治）+ backtest 日内 look-ahead 泄漏（已定位未修）
 
 - **背景**：用户拿内部研究资料《深度学习日前电价预测：欧洲方法论解读与广东本地化改造方案》（基于 Aliyon & Ritvanen, Energy 308 (2024) DREAMFS）对照核验 gdpower 落地度。核验结论：**方法论落地约 45%，落地的是「制度层」（sMAPE/rMAE、每日重训）、没落地的是「模型层」**（MLP 集成成员 ❌、regime/双模型路由仅负价窄版雏形、限价 clip ❌）。资料 3.4 承诺交付的三个模块 `feature_audit.py`/`eval_metrics.py`/`mlp_member.py` 仓库里一个都不存在（eval 那块功能等价内嵌在 kdocs_sync）。
