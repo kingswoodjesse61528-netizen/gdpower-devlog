@@ -11,6 +11,29 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-08-23（四）· mini 侧收编：git 分叉归一 + 覆盖率列部署 + 三个坑（skip-worktree / .sh 硬编码 / HTTP2-over-TUN）
+
+- **任务**：把当天的覆盖率列与 lag1 修复部署到 mini，并收掉 mini 已存在七周的 git 分叉。
+- **先抢救再动手**：动任何 git 操作前，先把 mini 独有内容打包拷回 Air（`~/gdpower-mini-rescue-20260823/`，4.4MB）：`DEVLOG-mini.md`(296 行) + review_lag1 工具 + 两份未提交改动的 patch + **`git bundle` 保住 5 个未推提交的完整历史**。`git bundle verify` 显示「records a complete history」。**这一步不依赖 GitHub，先消除单点风险再谈其它**。
+- **分叉收尾（方案：以 Air 为准，只抓 mini 独有的）**：核对确认 mini 那 5 个未推提交里，3 个 Air 已有等价实现（存档缺失告警 / 端口残留检查 / 网卡自动探测），另 2 个是 update.sh 相关而 **`git diff origin/main HEAD -- update.sh` 差异 0 行**（Air 的合并版已完全覆盖）→ 可安全 `reset --hard`。reset 前另备份 mini 的 `models/`(9 个文件)，因为当天刚把模型移出版本管理、reset 会删掉工作区文件。
+- **覆盖率部署**：mini 全量 47 项回归绿；`backfill_coverage.py` 回填 103 行（3 行因存档缺失留空），accuracy.csv 9 列对齐；API 重启后 `/accuracy` 带 coverage。
+- **⚠⚠ 意外收获：mini 的覆盖率回填给出了一个比 A/B 更干净的天然实验**——两台真实生产系统、同一市场、唯一差异就是 lag1 那 11 行：
+  ```
+  月份      mini(7/8 起有修复)   Air(无修复)
+  2026-05        0.525             0.538
+  2026-06        0.381             0.381    ← 完全一致
+  2026-07        0.603             0.515    ← 分岔
+  2026-08        0.623             0.489
+  ```
+  **6 月两台一模一样，7 月起分道扬镳，分岔点精确落在 lag1 修复上线的 7/8。**
+- **坑① `skip-worktree` 让 `reset --hard` 硬阻塞，且报错指向不相关的文件**：reset 一直失败报 `error: Entry 'CLAUDE.md' not uptodate`，但 `git diff CLAUDE.md` 是空的、`git status` 也不显示它。真因是 **mini 给 `models/*` 全打了 `git update-index --skip-worktree`**（「不让 git 碰模型」的土办法，与 Air 当天改用的 gitignore 是同一目的的两种实现），而 origin/main 里这些文件已被删除，git 拒绝处理。**排查手法：`git ls-files -v | grep -v "^H "`**（H=正常 / S=skip-worktree / 小写=assume-unchanged）——这是不可见状态，不出现在 `git status` 里。解除后 reset 立即成功。**教训：同一目标的两种实现共存时，冲突点不在实现本身，而在它们对第三方工具的可见性差异**；gitignore 是声明式、可见、进版本库，skip-worktree 是命令式、隐藏、只在本地索引里，后者在双机场景必然咬人。
+- **坑② `.sh` 是 Path.home 重构的漏网之鱼 → mini API 直接起不来**：reset 后 mini 的 API 挂了，`launchctl print` 只给 `last exit code = 1`、端口无监听，而**手动 `python api_server.py` 完全正常**。真报错只在 plist 指定的 `logs/launchd_stderr.log` 里：`cd: /Users/hydtzyj/gdpower: No such file` + `mkdir: /Users/hydtzyj: Permission denied`。根因是 **2026-07-03 那次「Path.home 重构」只覆盖了 .py**（plist 靠装载时 sed 适配），`launch_api.sh` 和 `install_service.sh` 一直写死 `/Users/hydtzyj`——Air 上路径碰巧一致所以永不暴露，mini 此前靠本地未推改动兜着，一 reset 就现形。已改 `${HOME}/gdpower`，全仓复查 .sh/.py 不再有硬编码（余下命中是注释文字）。**教训：可移植性重构要按文件类型列清单逐类核对（.py/.sh/.plist/.json/Makefile），别只扫一类就宣布完成——这类 bug 在源机上永远不触发，只在另一台机器上炸**；另：**手动跑能起来 ≠ 服务能起来**，中间隔着 wrapper 脚本，launchd 失败一律先看 StandardErrorPath。
+- **坑③ HTTP/2 过 Shadowrocket TUN 会卡死 → git 全线超时**：mini `git fetch` 报 `Empty reply from server` 或 `Failed to connect after 75s`，但 `curl https://github.com` 能通（12s）。**`git -c http.version=HTTP/1.1 ls-remote` 2.4 秒就返回**——是 HTTP/2 多路复用过 TUN 停摆，连接层其实秒建（time_connect 0.11~0.2s）。已 `git config --global http.version HTTP/1.1`（mini 上 zjpower/coal-watch/gas-watch/gdpower-pages/gdpower-devlog 一并受益）。
+- **⚠ 但 mini 网络仍不稳，HTTP/1.1 只在链路通的窗口有效**：当天晚些时候 `ls-remote` 又连续失败。**双机同步的可靠兜底 = `git bundle` 中转**（本次全程用它）：Air 侧 `git bundle create delta.bundle <base>..main` → `scp` → mini `git pull --ff-only /tmp/delta.bundle main`；反向同理。增量 bundle 极小（单个提交 1226 字节），**完全绕开 mini 的网络**。⚠ 建 bundle 必须写 `<base>..main` 而不是 `<base>..HEAD`，否则 bundle 里没有 `refs/heads/main`，对端 `pull` 会报 `couldn't find remote ref main`。
+- **状态**：✅ 两机 HEAD 一致（`d786934`），mini 工作区完全干净。mini 独有产物已全部入库（`DEVLOG-mini.md` 296 行 + review_lag1 工具 + 架构说明/备机配置 + 补档工具 + 外部数据模板），`_predeploy_bak_*/`、`_dedup_deploy_backup_*/` 已加 gitignore。
+- **改动文件**：`launch_api.sh`、`install_service.sh`（$HOME 可移植）、`.gitignore`（模型产物补齐 + mini 备份目录）、新增 `DEVLOG-mini.md`、`架构说明.md`、`AIR_备机配置.md`、`tools/review_lag1_fix.py`、`tools/review_lag1_notify.py`、`tools/backfill_predict_0707.py`、`external/external_data_template.{csv,xlsx}`。
+- **下一步**：① **mini 的 Shadowrocket 节点需要人工处理**（换节点是 GUI 操作，ssh 够不着）——在此之前 mini 的 `publish_pages.sh`/`sync_devlog.sh` 等联网自动化会间歇失败，双机同步走 bundle 中转。② mini 那份「飞书成功卡片重构」(+88 行 `tools/daily_retrain.py`) 本次未回收，patch 保存在 `~/gdpower-mini-rescue-20260823/patches/daily_retrain_feishu_card.patch`，需与 Air 新加的 honest 观察行合并后再上。③ 今晚 18:00 两机的每日重训都会首次带 honest 观察行与覆盖率告警。
+
 ## 2026-08-23（三）· 🔴 发现 mini 七周前已修好同一个 bug，Air 一直没有：price_lag1 日内形状修复移植上线
 
 - **怎么发现的**：准备 ssh 到 mini 部署覆盖率列时，`git status` 显示 mini 有未提交改动，而且**正好是我今天改过的两个文件**。一看 diff——`api_server.py` 里躺着一段 **2026-07-08** 的修复，注释写着「修复日前 price_lag1 断裂……晚高峰压峰」。**这正是我今天在 Air 上从 8/20 事故一路查出来的同一个现象**。mini 还有一份从未推送的 `DEVLOG-mini.md`（296 行 / 12 条），里面完整记着 07-08 的定位过程：误差几乎全集中在 16–23 时（19–22 晚高峰 rMAE 2.88）、晚高峰被摁在 320–385 而实际冲到 550/572/695、**峰值削 40–55%**、两次重训候选在共同 OOS 窗口都打不过现役 → **证明不是「模型旧了」，重训无解**。
