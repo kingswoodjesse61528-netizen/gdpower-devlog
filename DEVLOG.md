@@ -11,6 +11,45 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-09-06（三）· 给 retrain_model.py/api_server.py 主流程补基线单元测试
+
+- **起因**：巡检发现这两个核心文件（模型训练主脚本、唯一对外服务入口）此前只有
+  针对具体历史 bug 的窄范围回归测试（比如西电死特征清理、负价覆盖开关），主干
+  逻辑本身——评估指标计算、特征工程、`/predict` 完整链路——从没有过直接的单元
+  测试，只能靠端到端跑一遍看结果是否「看起来合理」来间接验证。
+- **做了什么**：新增 4 个测试文件、31 项测试，全部用手算期望值断言具体数值
+  （而不是重新实现一遍逻辑再比较那样的空测试）：
+  1. `tests/test_retrain_evaluate.py`（10 项）—— `evaluate()` 是全项目训练/回测/
+     每日重训决策共用的指标计算函数，覆盖 MAE/sMAPE 公式本身 + 源码里显式写的
+     几个容错分支（掩码为空时返回 0 而非 NaN、high_mae 只算严格 >600、smape
+     分母下限保护防止价格趋近 0 时除零爆炸）。
+  2. `tests/test_retrain_build_features.py`（10 项）—— 用「价格=行索引」的合成
+     序列让 `price_lag*`/`price_roll24_mean` 的正确值可以直接手算，验证滞后
+     特征位移方向、hour_sin/cos 已知点数值、day_of_week/is_weekend、is_hot/
+     is_cold 阈值判断。
+  3. `tests/test_feature_contract_consistency.py`（2 项）—— **本批最有价值的一个**：
+     用同一份合成数据交叉验证 `retrain_model.build_features()`（训练侧）与
+     `api_server.build_features_full()`（线上侧）在 `FEATURE_COLS_BASE` 交集列上
+     数值完全一致——这是 train/serve skew 的经典高发点（CLAUDE.md 记录过好几次
+     因两处特征公式不一致导致的生产事故），此前全靠人工对照复制公式，改一处
+     忘改另一处不会有任何信号。实测两处目前确实完全一致。
+  4. `tests/test_run_prediction_baseline.py`（9 项）—— `/predict` 端点唯一核心逻辑
+     `run_prediction()` 的端到端基线：用只有 `predict()` 方法的 stub 模型替代
+     真实 .pkl（唯一没法在单元测试里合理提供真实实例的外部依赖），其余环节
+     （`build_tomorrow_rows` 回退插值、`build_features_full`、置信区间、摘要
+     拼装）全走真实代码路径不额外 mock。覆盖：无模型时正确抛 503、响应字段
+     完整、hourly 24 条、xgb/lgb 融合公式（(300+320)/2=310）、avg/max/min 与
+     hourly 一致、区间包住点预测、model_source 正确。
+- **状态**：✅ 全量 168 项测试绿（137→168）。
+- **改动文件**：新建 `tests/test_retrain_evaluate.py`、
+  `tests/test_retrain_build_features.py`、`tests/test_feature_contract_consistency.py`、
+  `tests/test_run_prediction_baseline.py`、`DEVLOG.md`。
+- **未做（范围之外，供以后参考）**：`retrain_model.main()`/`api_server` 的
+  FastAPI 端点路由本身（`/accuracy`、`/model_info` 等）、真实文件 I/O 路径
+  （模型加载、CSV 读取）没有覆盖——这次聚焦在「可脱离副作用直接单测的核心
+  计算逻辑」，端到端集成测试（真实启动 API + 真实模型文件）是另一类工作，
+  成本高得多，暂不在基线测试范围内。
+
 ## 2026-09-06（二）· DM 检验从观察态转正，参与 DECIDE 一票否决
 
 - **起因**：DM 检验（Diebold-Mariano）07-04 上线以来一直只报告不否决。巡检
