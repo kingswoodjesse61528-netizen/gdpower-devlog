@@ -79,6 +79,16 @@
   `true`（`.secrets.json` 不进 git，改前已备份
   `.secrets.json.bak_20260906_200710`）。次日 `update.sh` 正常跑完后需
   检查 PWA 手机看板区间带是否肉眼可见变宽（不需要改 `gdpower-pages` 代码）。
+- **上线后的全分支复审 + 两轮收尾修复**（commit `5f4dd77`、`6af7853`）：
+  最强模型跑了一次全 6 提交的整体复审，发现 `retrain_model.py` 的
+  `--quantile` 训练块此前没有异常保护（分位训练失败会拖垮主模型当天完全
+  不重训，违反解耦设计目标）、`backtest.py` 里还有第三处判读区间硬编码、
+  spec 明文要求的"两套门槛互不影响"断言测试缺失、`copy_promote_files()`
+  拷贝失败会被飞书通知悄悄吞掉等问题，一次性修复；复审这轮修复时又发现
+  新引入的一个问题（`promote()` 把警告文字拼进了本该保持干净时间戳的
+  `trained_at` 字段）和一个没修透的问题（解耦断言测试写成了 `x==x`
+  的重言式，删掉真实校验逻辑也照样通过），随即补了第二轮修复。全量回归
+  从 195 涨到 197 项，全绿。已 push 到 `origin/main`。
 - **改动文件**：`quantile_utils.py`、`tools/exp_quantile_coverage.py`、
   `tools/daily_retrain.py`、`tests/test_quantile_utils.py`（新建）、
   `tests/test_daily_retrain_quantile_gate.py`（新建）、`.secrets.json`（不进
