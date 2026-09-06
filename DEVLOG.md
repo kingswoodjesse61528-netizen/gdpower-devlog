@@ -11,6 +11,41 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-09-06（四）· cmp_new/cmp_old.json 按日期归档，供事后复盘窗口敏感性
+
+- **起因**：读 Nowotarski & Weron (2018) 概率电价预测综述时，论文点名警告
+  "样本外测试期太短会得出误导性、甚至反转的模型排名"（GEFCom2014 竞赛里
+  某神经网络模型 12 天测试期排名第三，拉长到 365 天完整样本外测试后垫底）。
+  用当时唯一留存的一份快照（`logs/daily_retrain_cmp_new/old.json`，09-05
+  那次决策）做窗口长度敏感性重放：把同一批候选数据按最近 7/10/15/20/25/30
+  天不同窗口重新算 `rmae_new`，结果护栏判决在"否决"和"通过"之间翻转了 5
+  次（7~25 天全部 ≥1.0 会被否决，实际用的 30 天窗口 rmae_new=0.999 压线
+  通过）——论文里的警示在自己系统上真实复现了，而且是压着边界线过去的。
+- **问题**：`daily_retrain_cmp_new.json`/`daily_retrain_cmp_old.json` 每天被
+  下一次运行覆盖，只能看到"最新一次"的逐日回测明细，没法回溯更早的
+  promote 决策重复做同样的敏感性检查——这次分析完全是"事后唯一一次
+  快照刚好还没被覆盖"的运气。
+- **做了什么**：新增 `archive_cmp_snapshot(date_str)`（只读归档，异常只记
+  日志不影响主流程，与 `honest_gap()` 同一类"旁路观察器不打断重训"的
+  设计），在 COMPARE 阶段两次 `run_backtest()` 成功、`compare_windows()`
+  调用之前，把 `cmp_new.json`/`cmp_old.json` 各拷贝一份到
+  `logs/cmp_history/<date>_new.json`/`<date>_old.json`。同日重跑
+  （`--force`）幂等覆盖同一份归档，不产生多份。
+- **明确没做的**：这次只加了归档，**没有改动 DECIDE 判据本身**（rMAE 护栏
+  依然是单窗口硬阈值、无显著性要求，这正是它对窗口长度敏感的根源）——
+  要不要给 rMAE 护栏也补一层"连续 N 天才否决"之类的缓冲，需要攒够更多
+  真实决策的历史数据（现在有归档了）判断这种边界抖动是常态还是偶发，
+  再决定值不值得改、怎么改，不属于这次改动范围。
+- **状态**：✅ 新增 `tests/test_cmp_snapshot_archive.py`（4 项）+ 全量
+  172 项回归绿（168→172）。归档文件极小（每天约 28KB），未加保留期限，
+  存储量级可忽略。
+- **改动文件**：`tools/daily_retrain.py`（新增 `CMP_HISTORY_DIR` 常量 +
+  `archive_cmp_snapshot()` + 在 `main()` 里接线调用）、
+  `tests/test_cmp_snapshot_archive.py`（新建）、`DEVLOG.md`。
+- **依据**：Nowotarski, J. & Weron, R. (2018). "Recent advances in
+  electricity price forecasting: A review of probabilistic forecasting."
+  *Renewable and Sustainable Energy Reviews*, 81, 1548-1568.
+
 ## 2026-09-06（三）· 给 retrain_model.py/api_server.py 主流程补基线单元测试
 
 - **起因**：巡检发现这两个核心文件（模型训练主脚本、唯一对外服务入口）此前只有
