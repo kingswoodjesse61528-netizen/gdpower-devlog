@@ -11,6 +11,85 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-09-06（五）· 分位数+conformal 校准区间正式上线（QUANTILE_CI_ENABLED=true）
+
+- **起因**：`quantile_utils.py` 的分位数（LightGBM P5/P10/P50/P90/P95）+ Split
+  Conformal（CQR, Romano et al. 2019）校准系统 8 月初就写完并接入
+  `retrain_model.py`/`api_server.py`/`backtest.py` 三处，6 组实验
+  （`logs/exp_quantile_*.md`）证明校准后覆盖率能从生产实测的 0.478（标称
+  90%）拉到 0.82~0.93，但从未打开开关、也从未接入每日重训——`daily_retrain.py`
+  从来没传过 `--quantile` 训练，`PROMOTE_FILES` 也不含分位模型文件。读
+  Nowotarski & Weron (2018) 概率电价预测综述引出本轮讨论，走 brainstorming
+  →design spec→writing-plans→subagent-driven-development 全流程，用 5 个
+  子任务把这套"写完但从未真正跑过"的系统真正接上生产。
+- **设计要点**（详见 `docs/superpowers/specs/2026-09-06-quantile-conformal-ci-rollout-design.md`
+  和 `docs/superpowers/plans/2026-09-06-quantile-conformal-ci-rollout.md`）：
+  1. `quantile_utils.py` 新增 `COVERAGE_BAND_80=(0.76,0.84)`/
+     `COVERAGE_BAND_90=(0.86,0.94)`（判读区间常量，唯一权威定义）+
+     `judge_coverage(summary)` 判读函数；`tools/exp_quantile_coverage.py`
+     改引用这份共享定义，消除数字重复。
+  2. `daily_retrain.py` 的 STAGE①/STAGE② 训练都加 `--quantile --calib-days
+     30`；COMPARE 阶段 `run_backtest()` 对候选（非 serving 基准）额外传
+     `--quantile-dir` 拿到覆盖率统计。
+  3. 分位模型的 promote 决定**与主模型（xgb/lgb）rMAE/DM 门槛完全解耦**：
+     `decide_quantile_verdict()` 独立判定，`PROMOTE_FILES` 拆成
+     `PROMOTE_FILES_MAIN`（不变）+ `PROMOTE_FILES_QUANTILE`（新增 6 个文件），
+     `copy_promote_files()` 按各自门槛结果分别决定拷不拷贝，任一方失败不
+     连累另一方。
+  4. 首次上线（serving 目录尚无分位模型）无条件通过一次（bootstrap），
+     之后每天走真正的覆盖率门槛。
+  5. 冬季/负价场景验证缺口（8 月实验 0 天触发负价窗口）不设阻塞性前置
+     条件——靠 `api_server.py` 已有的 `neg_risk_hours` 宽度钳制 + `kdocs_
+     sync.py::_coverage_alert()` 监控兜底（正是当初发现 0.478 问题的那套
+     机制）。
+  6. 下游 PWA（`gdpower-pages`）确认**不需要改一行代码**——数据流
+     `api_server.py` 写 `pred_lower`/`pred_upper` → `predictions/*.csv` →
+     `kdocs_sync.py`/`export_snapshot.py` → `index.html` Chart.js 区间带
+     已经在用这两个字段，换成分位+conformal 结果自动生效。
+- **执行**（subagent-driven-development，5 个任务全部一次或一轮修复后评审通过）：
+  - Task 1（commit `88fdadc`）：`quantile_utils.judge_coverage()` + 判读常量，6 项测试。
+  - Task 2（commit `258ae18`→修复`1a831fe`）：`exp_quantile_coverage.py` 改引用共享常量；
+    首轮评审发现 `main()` 里还有两处硬编码判读区间数字漏改，修复后复审通过。
+  - Task 3（commit `e448e4e`）：`daily_retrain.py` 新增
+    `quantile_files_present`/`load_quantile_summary`/`decide_quantile_verdict`
+    三个纯函数 + `PROMOTE_FILES` 拆分 + `run_backtest()` 加 `quantile_dir`
+    参数；实现时顺带发现并修复了 `promote()` 里两处遗留的旧 `PROMOTE_FILES`
+    引用（会导致 NameError），13 项新测试 + 全量回归 191 项绿。
+  - Task 4（commit `a3f18aa`）：主流程接线——训练参数、COMPARE 传
+    `quantile_dir`、独立门槛判定接入 `main()`、`promote()` 签名改为
+    `(staged_dir, promote_quantile)`；评审重点核对了控制流（门槛真解耦、
+    `q_passed` 没被误接成主模型的 `passed`、`quantile_dir` 只传给候选
+    回测不传给基准回测），全部核对通过，17 项新测试 + 全量回归 195 项绿。
+  - Task 5（本条）：打开生产开关，人工验证首次真实上线。
+- **首次真实上线结果**（`daily_retrain.py --force`，2026-09-06 20:07）：
+  ```
+  COMPARE[prod]：新 MAE=38.6 vs 生产实际 44.67，候选 rMAE=0.898（30 天）
+  DM 检验：p=0.120（≥0.05）→ 与基准差异【不显著】（不参与否决）
+  分位区间门槛：✅通过（首次上线（bootstrap），未经覆盖率门槛）
+  主模型已拷贝到双目录（xgb_model.pkl, lgb_model.pkl, model_meta_v2.json）
+  分位模型已拷贝到双目录（lgb_quantile_p05/10/50/90/95.pkl, model_meta_quantile_v2.json）
+  ```
+  API 重启后 `curl /model_info` 确认 `quantile_ci_enabled: true`、
+  `quantile_loaded: true`、`quantile_alphas: [0.05, 0.1, 0.5, 0.9, 0.95]`。
+  一次真实 `/predict` 调用（`ci_level=90`）确认
+  `model_source: "xgboost+quantile+conformal"`，00 时区间
+  `[372.1, 581.6]`（宽度 209.5 元/MWh），明显宽于历史启发式区间量级
+  ——与 8 月实验"校准后区间变宽但覆盖率说真话"的结论一致。
+- **状态**：✅ 已上线，`.secrets.json` 的 `QUANTILE_CI_ENABLED` 已改
+  `true`（`.secrets.json` 不进 git，改前已备份
+  `.secrets.json.bak_20260906_200710`）。次日 `update.sh` 正常跑完后需
+  检查 PWA 手机看板区间带是否肉眼可见变宽（不需要改 `gdpower-pages` 代码）。
+- **改动文件**：`quantile_utils.py`、`tools/exp_quantile_coverage.py`、
+  `tools/daily_retrain.py`、`tests/test_quantile_utils.py`（新建）、
+  `tests/test_daily_retrain_quantile_gate.py`（新建）、`.secrets.json`（不进
+  git）、`DEVLOG.md`。
+- **待办（mini 侧）**：mini（`zhouyijun`）的 `.secrets.json` 需要用户手动
+  备份+打开 `QUANTILE_CI_ENABLED`；代码部分（Task 1-4 全部 commit）走
+  `git pull` 即可，不需要重复实现。
+- **依据**：Nowotarski, J. & Weron, R. (2018). *Renewable and Sustainable
+  Energy Reviews*, 81, 1548-1568；Romano, Patterson & Candès (2019),
+  "Conformalized Quantile Regression"（本机 8 月实现所依据的 CQR 方法）。
+
 ## 2026-09-06（四）· cmp_new/cmp_old.json 按日期归档，供事后复盘窗口敏感性
 
 - **起因**：读 Nowotarski & Weron (2018) 概率电价预测综述时，论文点名警告
