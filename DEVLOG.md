@@ -11,6 +11,31 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-09-06（二）· DM 检验从观察态转正，参与 DECIDE 一票否决
+
+- **起因**：DM 检验（Diebold-Mariano）07-04 上线以来一直只报告不否决。巡检
+  `logs/dailyretrain_stdout.log` 发现上线至今 **53 次判定候选「显著更好」、0 次
+  「更差」**，转正几乎不改变现有 promote 行为，却能在真正出现候选变差时提供
+  比现有相对 MAE 容差更严谨的统计学拦截——依据 Lago et al. (2021, Applied
+  Energy) EPF 研究检查清单：新方法要用统计检验而非仅比较误差数值判断优劣。
+- **规则**：`dm_p<0.05` 且 `dm_stat>0`（候选统计显著更差）→ 一票否决，与既有
+  rMAE 护栏（naive 可靠时 rmae_new>=1.0）并列独立——naive 基线不可靠导致 rMAE
+  护栏停用时，DM 护栏不受影响仍然生效。
+- **做了什么（TDD）**：把 `main()` 里原本内联的 DECIDE 判定逻辑抽成纯函数
+  `decide_verdict(mae_new, mae_ref, tolerance, rmae_new, naive_mae_new, dm_stat,
+  dm_p, dm_n)`，`tests/test_decide_verdict_dm_gate.py` 8 项覆盖：正常通过、DM
+  否决、DM 更好/不显著/样本不足均不否决、rMAE 护栏不受影响、naive 不可靠时
+  两条护栏各自独立生效、劣于基准无护栏触发。
+- **状态**：✅ 全量 137 项测试绿。用当前 `CMP_NEW_JSON`/`CMP_OLD_JSON`（09-05
+  最后一次真实重训留下的数据）跑了一遍 `compare_windows()→decide_verdict()`
+  端到端验证（不训练，只验证接线）：`dm_p=0.12`(不显著)、`rmae_new=0.999`，
+  两条护栏都不触发，`passed=True`，与 09-05 实际 `promoted` 结果一致。
+  **未主动跑一次真实 `--dry-decide`**（会启动真实训练，几分钟量级）——当晚
+  18:00 的自动重训会是这条新逻辑第一次在真实生产环境下运行，建议留意飞书报告
+  里 `verdict` 字段和 DM 检验那一行的文案（"不参与否决"/"一票否决"）。
+- **改动文件**：`tools/daily_retrain.py`、新建
+  `tests/test_decide_verdict_dm_gate.py`、`DEVLOG.md`。
+
 ## 2026-09-06（一）· rMAE naive 基线改为按星期分段（论文 naive³）
 
 - **起因**：精读 Lago, Marcjasz, De Schutter, Weron (2021, Applied Energy)《Forecasting day-ahead electricity prices》，其 5.4.1 节论证 rMAE 的 naive 基线用「周二~周五 D-1、周六/周日/周一 D-7」（论文 naive³）优于统一 D-1——周末/周一价格结构常与工作日不同，统一 D-1 会系统性偏差。这与 07-04 memory 里记的待办重合，这次有了论文权威依据。
