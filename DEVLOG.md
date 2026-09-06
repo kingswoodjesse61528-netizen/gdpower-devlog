@@ -11,6 +11,75 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-09-06（一）· rMAE naive 基线改为按星期分段（论文 naive³）
+
+- **起因**：精读 Lago, Marcjasz, De Schutter, Weron (2021, Applied Energy)《Forecasting day-ahead electricity prices》，其 5.4.1 节论证 rMAE 的 naive 基线用「周二~周五 D-1、周六/周日/周一 D-7」（论文 naive³）优于统一 D-1——周末/周一价格结构常与工作日不同，统一 D-1 会系统性偏差。这与 07-04 memory 里记的待办重合，这次有了论文权威依据。
+- **做了什么（TDD）**：新增 `features_ext.naive_baseline_date(target_date)` 作唯一实现（放在 `neg_price_gate` 之后），`tests/test_naive_baseline.py` 8 项覆盖周一到周日全部分支 + 返回类型。`backtest.py:370-377`、`kdocs_sync.py:499-508`、`tools/backfill_rmae.py:naive_and_rmae` 三处硬编码 D-1 的 naive 计算全部改调用该函数，避免又出现「特征契约三处重复」那类漂移。
+- **状态**：✅ 全量 126 项测试绿。`backfill_rmae.py --dry-run` 用真实 `accuracy.csv`（127 行）跑通，未见异常（rMAE 均值 1.191，范围 0.138~3.301，量级与改动前相当）。**未写盘**——历史行仍是旧 D-1 口径算出的 naive_mae/rmae，是否要重新回填由用户决定。
+- **改动文件**：`features_ext.py`、`backtest.py`、`kdocs_sync.py`、`tools/backfill_rmae.py`、新建 `tests/test_naive_baseline.py`、`DEVLOG.md`。
+- **下一步（未做，留给用户决策）**：
+  1. 是否要用新口径重新回填 `accuracy.csv` 历史行（`backfill_rmae.py` 已支持，去掉 `--dry-run` 即可实写，会自动备份）——不回填的话，历史行与新产生的行口径不一致，读长期序列时要注意这个断点。
+  2. `tools/daily_retrain.py` 的 `NAIVE_MAE_FLOOR=30` 是按旧 D-1 口径的历史分布标定的（25分位29.4~中位40.3），换新口径后这个分布会变，需要观察几天新数据后重新标定，本次未动。
+  3. mini 侧尚未同步这次改动。
+
+## 2026-08-23（十三）· mini `daily_retrain_feishu_card.patch` 确认过时，删除；顺带修一个信息缺口
+
+- **起因**：待办里挂着的 mini 独有 patch，要求合并——把「每日重训成功」通知从纯文本改成飞书 Interactive Card。
+- **核对后发现 patch 已经过时，不该合并**：① patch 想引入的真正飞书 Interactive Card 格式（`msg_type: 'interactive'`），Air 早就走过又撤回了（commit `97c1f70`，原因是误将未提交的 kdocs_sync 卡片重构一并 push，工作区污染，不是功能被否决，但后续 `daily_retrain.py` 统一走的是更保守的 `card_type`+结构化字段+纯文本推送）；② patch 第二个改动块（`skipped` 状态从终态改成可重试）已经在 Air 上逐字节一致存在；③ patch 想要的「上线成功通知结构化」，Air 已经用 `card_type='success'` 实现了。
+- **顺带发现一个真实缺口**：DECIDE 阶段组装的 `metrics_text`（含候选/基准 MAE、rMAE、DM 检验显著性、honest 观察、判定说明）被用在「观察」`dry_decide` 和「未通过」`rejected` 两条卡片路径，唯独「已上线」`ok` 分支没用，只重新手写了一份更精简的字段——三条通知路径信息完整度不对等。
+- **做了什么（TDD）**：抽出 `build_success_fields(metrics_text, detail, backup_dir)`，`main()` 的成功分支改调用它，不再单独重复候选 MAE/rMAE（`metrics_text` 已含）。`tests/test_daily_retrain_success_notify.py` 3 项。删除 `~/gdpower-mini-rescue-20260823/patches/` 下两个已过时的 patch（`daily_retrain_feishu_card.patch` 本条 + 更早前已确认过时的 `api_server_lag1.patch`，后者是 mini 07-08 lag1 修复的旧 patch，已经通过 `features_ext.lag1_proxy` 更好的方式落地，不再需要）。
+- **状态**：✅ 全量 114 项测试绿。
+- **改动文件**：`tools/daily_retrain.py`、新建 `tests/test_daily_retrain_success_notify.py`、`CLAUDE.md`；删除 mini 抢救目录下两个 patch 文件（不在 git 仓库里，无需提交）。
+
+## 2026-08-23（十二）· `backfill_batch.py` 日期改接受命令行参数（这条待办至此全部完成）
+
+- **做了什么（TDD）**：新增 `parse_args()`，日期从命令行位置参数传入（`python tools/backfill_batch.py 2026-05-03 2026-05-09`），删掉写死的模块级 `BACKFILL_DATES`。`main()` 改接受 `dates` 参数。刻意不留写死默认值——不传日期或格式不对，`argparse` 直接报错退出（exit 2），不会悄悄补错日期。
+- **状态**：✅ 新增 `tests/test_backfill_batch_dates_cli.py` 6 项，全量 111 项回归绿。真实 CLI 端到端验证：不传参数 exit 2，传参数正常解析。
+- **改动文件**：`tools/backfill_batch.py`、新建 `tests/test_backfill_batch_dates_cli.py`、`CLAUDE.md`。
+- 至此「统一 backfill_batch.py」这条 P2 待办（launchctl 命令 + 命令行日期参数两部分）全部完成。
+
+## 2026-08-23（十一）· `tools/backfill_batch.py` 修旧版 launchctl 命令
+
+- **起因**：待办清单里挂着的老陷阱——`restart_api()` 还在用 `launchctl unload/load`，陷阱2 明确警告过这会在现代 macOS 让服务熔断（曾导致 API 连挂 3 天）。这个脚本不在日常自动化路径里所以一直没暴露，属于「没人踩雷不代表没雷」。
+- **前置重构**：脚本原本是无 `if __name__ == '__main__':` 保护的顶层代码，`import` 会立即触发真实的 CSV 截断/API 重启/补档流程——没法安全测试。先把主流程包进 `main()`，纯结构性改动不改行为，用 AST 解析验证了这条重构测试在旧代码上确实会检测出 5 处顶层执行语句（For/Try/裸表达式调用），证明测试有效再往下走。
+- **做了什么（TDD）**：`restart_api()` 换成现代三连（`bootout`/`bootstrap`/`kickstart`）。`tests/test_backfill_batch_restart_api.py` 3 项：命令替换 2 项 + 模块顶层结构 1 项。
+- **状态**：✅ 全量 105 项测试绿。
+- **改动文件**：`tools/backfill_batch.py`、新建 `tests/test_backfill_batch_restart_api.py`、`CLAUDE.md`。
+- **剩**：这条待办原本还有「统一成接受命令行传日期版」（当前写死 `BACKFILL_DATES` 列表），这次只处理了 launchctl 风险点，命令行参数化没动。
+
+## 2026-08-23（十）· `backtest.py` 默认口径切成 `--honest-lag`
+
+- **起因**：honest 观察数据已积累满 30 天，看数据决定要不要切默认。同期窗口（7/25~8/23）honest 口径 MAE 38.4/覆盖率 0.61，vs 生产实际 MAE 49.19/覆盖率 0.524，`honest_ratio`≈0.78，落在 CLAUDE.md 早先定的「<0.9 可切默认」区间。
+- **风险排查**：`daily_retrain.py` 的 COMPARE 判据用的是相对 MAE（候选/基准比值 `rmae_new`），候选和基准两次 backtest 调用都不显式传 `honest`，默认值切换后两边会**同步**变成 honest 口径，相对关系理论上不受影响——不需要因为这次切换重设 `DAILY_RETRAIN_TOLERANCE`。
+- **做了什么（TDD）**：`backtest.py` 里 parser 构造从 `main()` 内联抽成 `build_arg_parser()`（测试要测真实代码，不是复刻件）；`--honest-lag` 默认值改 `True`，新增 `--legacy-lag` 显式切回旧口径。`tests/test_backtest_default_honest.py` 3 项。真实 CLI 调用验证：不传参数 `lag_mode` 字段确实是 `honest`。
+- **`daily_retrain.py` 的 `honest_gap()` 观察支线不用改代码**，但语义变了——切默认前它比较「honest vs legacy 两口径」，切默认后主流程本身已是 honest，这条显式传 `--honest-lag` 变成跟主流程同口径的重复调用（无害），但它比较的对象是候选 vs **生产实际**，依然在持续追踪训练窗口泄漏这另一重没解决的偏差，保留有意义。
+- **状态**：✅ 全量 102 项测试绿。理论论证 DECIDE 判据不受影响，但**待观察几轮真实 daily_retrain 跑下来 `guard_fail`/`passed` 没有反常（比如连续多天全部否决）才算真正验证过**。
+- **改动文件**：`backtest.py`、新建 `tests/test_backtest_default_honest.py`、`CLAUDE.md`。
+
+## 2026-08-23（九）· 西电死特征清理 + 一次「对比方法错误、结果反转」的教训
+
+- **做了什么**：`日前西电`、`west_ratio` 从三处镜像 `FEATURE_COLS` 定义（retrain_model.py/backtest.py/api_server.py）里删除，TDD（`tests/test_dead_west_power_features_removed.py` 4 项）。`predict_tomorrow.py` 是游离手动脚本，不在调度里，没跟改。
+- **⚠ 验证「删特征不掉分」第一次得出了错误结论**：拿今天早训练（训练到 8/20）的生产模型 vs 这次训练（训练到 7/23）的候选模型，在同一 7/24~8/23 窗口跑 `backtest.py` 对比，MAE 13.19→18.99，看着暴涨 44%。排查后发现是评估设计的假象——`backtest.py` 本身有数据泄露（模型训练时已包含被回测的日期），生产模型的训练集覆盖了这 31 天里的前 28 天，等于背题作答，候选模型是真样本外。用 `git stash` 精确切回三个文件训练同窗口（`--test-start 2026-07-24`）的对照组重新对比：对照组 19.06 vs 候选组 18.99，**不掉分，反而略有改善**。
+- **教训**：`backtest.py` 做「改前 vs 改后」对比，必须先固定训练窗口截止日期这个变量，否则数据泄露程度不同会把结论带偏，方向可能整个反过来。
+- **⚠ Promote 时又踩了一次陷阱1「双目录」**：`--stage` 训练的候选模型手工 cp 到 `~/gdpower/models/` 后，重启 API，`curl /model_info` 的 `trained_at` 纹丝不动、也不报错——才想起 `api_server.py` 实际读的是另一个硬编码目录（`TRAIN_MODEL_DIR`），正式（非 `--stage`）保存流程本来会自动 glob 同步过去，但 `--stage` 模式不会。补 `cp` 全部 `*.pkl`+`model_meta*.json` 后重启，`trained_at`/`feature_count`（36）核对通过才算真正上线。
+- **状态**：✅ 全量 99 项测试绿。新生产模型 `trained_at=2026-08-23T22:00:33`，训练窗口 `2025-01-08~2026-08-20`，特征 36 列（不含 west_ratio），已在 Air 上线并端到端验证。
+- **改动文件**：`retrain_model.py`、`backtest.py`、`api_server.py`、`tests/test_dead_west_power_features_removed.py`（新建）、`tests/test_honest_lag.py`（去掉一条抽样断言里已消失的列名）、`CLAUDE.md`。
+- **坑**：**同一天第二次踩「双目录」，且是在已经写进 CLAUDE.md 陷阱1 的情况下踩的**——陷阱记录本身太简略（只一句话），没有落到「`--stage` 手工 promote 这条路径」这个具体场景，导致读过陷阱1 也没联想到要检查。已把陷阱1 扩充为含具体场景描述，并强调「重启命令不报错 ≠ 真的生效，必须 curl 核对」。
+
+## 2026-08-23（八）· ⚠ 负价专项优化机制证伪并暂停（P0「重训陈旧模型」查出的意外真相）
+
+- **起因**：待办里「辅助模型陈旧 116 天」`clf_neg_price`/`reg_neg_price`/`xgb_weighted`/`lgb_weighted` 被列为 P0，用户拍板「重训对齐」。动手前先查来源：不在任何自动化管线里，是 `notebooks/optimize_neg_price.ipynb` 一次性跑出、人工挑选存盘的「负价专项优化」——对占比仅 0.43% 的负价样本做 20 倍加权 + 两阶段分类/回归。
+- **尽调发现两处需先处理**：① notebook 硬编码的 `DATA_PATH` 指向另一个目录，实测与 `~/gdpower` 下同名 CSV 内容/mtime 完全一致，非死路径。② 全部历史（2025-01 至今）负价样本仅 **62 个**，几乎全挤在 2025-11~2026-02 唯一一个完整冬季窗口——不管怎么切分训练/测试都切不出两个独立冬季做时间序列外推验证。
+- **切分策略**：test 固定在 2026-01~02（历史上负价样本最密集的 42 个所在窗口，与 notebook 当初训练用的是同一窗口，数字才可比），train 吸收其余全部时间（含 2025-11/12 与 2026-05 的负价样本 + 3-8 月新数据）。
+- **⚠ 意外结果**：用最新数据同口径重训后，四个新方案（整体 MAE 26.30~28.85、负价 MAE 49.17~124.36）**全部比不做任何负价优化的普通基线模型（整体 MAE 14.85、负价 MAE 17.89）差**。旧的 4/29 生产模型在同一 test 窗口上同样比基线差（负价 MAE 49.07/73.40）。分类器 `clf_neg_price` 在 42 个真实负价样本上 precision/recall/f1 全 0.00，一个都没识别出来。
+- **排除「是切分方式导致假象」的可能**：4/29 旧模型训练时压根没见过 2026-01/02，是真正的样本外测试，同样比基线差；两次独立训练（4/29、8/23）复现同一方向。**结论：不是「待重训对齐」的陈旧问题，是这套方法论本身在 62 个样本的极端小样本下有害**——20 倍加权学到的是过拟合噪声，不是可泛化规律。
+- **生产影响远超预期**：这套机制不是摆设，`api_server.py::run_prediction()` 里每年 11/12/1/2 月、每天 10-15 点真实主导预测——负价概率 >0.3 时 100% 替换 `final[h]`（区间宽度还乘 1.5），≤0.3 时也按 70% 权重混入。
+- **用户拍板**：先暂停这套机制止损，不落盘任何新模型。
+- **做了什么（TDD 全程）**：新建 `tests/test_neg_price_override_disabled.py`（4 项，用真实 xgb/lgb_model + 会返回明显毒值的假 clf/reg_neg/xgb_weighted/lgb_weighted，验证暂停后预测值不再被污染）。RED 确认失败原因符合预期后，删掉 `run_prediction()` 里读取这四个辅助模型改写 `final[h]`/`ci_width[h]` 的分支，**保留** `neg_risk_hours` 规则性标注（门槛本身有效，问题只在「触发后怎么修正预测值」）。顺带清理死代码 `FEATURE_COLS_AUX` 常量与 `X_full`，修正 `summary` 文案里「已启用两阶段负价预测模型」的失实描述。
+- **状态**：✅ 新增 4 项 + 全量 **95 项**回归绿。四个旧 pkl 文件保留在 `models/` 但不再加载使用（不删，留作以后重新设计的参考）。
+- **改动文件**：`api_server.py`、新建 `tests/test_neg_price_override_disabled.py`、`CLAUDE.md`。
+- **坑**：**不要在极端小样本上刻意加权优化「重要但罕见」的场景**——负价只有 62 个样本，「这么重要应该单独建模」的直觉在这个样本量下是错的，加权只会让模型死记硬背这几十个样本的噪声。要重新做负价专项优化，前提是样本攒够（等下一个完整冬季），或换一种不需要「学判别边界」的思路（规则触发 + 有物理依据的固定修正量）。**同一天里第二次「模型不是摆设，真影响生产」的教训**：辅助模型看似可选加载（`optional`），但一旦触发就是 70%~100% 权重接管——「optional 加载」不等于「optional 影响」。
+
 ## 2026-08-23（七）· ⚠ 同日修复：次日边界同步被短路吃掉，全天只有一次机会
 
 - **起因**：用户确认「次日数据每天 11 点左右发布」。核对触发时刻发现 `update.plist` 实际是 **12:00 首跑 + 13:00-17:00 每 30 分钟补跑**（CLAUDE.md 陷阱4 写的 11:00 已过时）。11 点发布 vs 12:00 首跑，看似有 1 小时余量，但顺手核对 `run_sync()` 代码时发现一个当天自己埋的 bug。
