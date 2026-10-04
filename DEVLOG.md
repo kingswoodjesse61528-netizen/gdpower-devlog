@@ -11,6 +11,27 @@
 
 <!-- Claude Code：新记录加在这条下面 -->
 
+## 2026-10-04 · 退化告警加 rMAE 门控 + 修「launchd 下直连兜底从未生效」+ webhook 补兜底
+
+- **起因**：飞书「模型退化」告警 10-02 MAE=155。排查=**非退化**：实际日前均价 09-28~10-01
+  冲到 640~729（峰 1119）、10-02 国庆骤回 451，模型靠价格滞后特征追高；同日 naive MAE=200、
+  rMAE=0.774（仍优于抄昨天），10-03 MAE 回落 22.4；10-03 18:00 每日重训已自动 promote。
+- **A. 退化告警叠加 rMAE**（`kdocs_sync._is_degraded` / `_roll3_watch_rmae_ok`，常量 `DEGRADE_RMAE=1.0`）：
+  单日 MAE≥70 **且** rMAE≥1 才报「模型退化」，rMAE 缺失照报；「模型注意」轨叠加近 3 日 rMAE 均值≥1。
+  MAE 高但 rMAE<1 记 `行情剧变` 只落日志。历史回放：37 个 MAE≥70 日中 11 个将不再告警。
+- **C. 直连兜底在 launchd 下从未生效（根因）**：plist PATH 不含 `/usr/sbin`，`_active_phys_iface()`
+  裸名调 `networksetup`/`ipconfig` → FileNotFoundError 被吞 → 恒 (None, None)，日志只显示
+  「找不到有 IP 的活跃物理网卡」。金山取数 `fetch_via_direct` 与飞书换 token 兜底一直是摆设；
+  终端手测 PATH 完整所以从没暴露。→ 改绝对路径 `/usr/sbin/...`（代码层修，两机 git pull 即生效）。
+- **webhook 推送补兜底**：`_feishu_send`（所有 kdocs_sync webhook 推送底层）原无直连兜底（陷阱12
+  只补了换 token）。新增 `_feishu_webhook_direct`；仅 `requests.ConnectionError`（含 SSLError）触发，
+  **ReadTimeout 不重发**（可能已送达，防群里双发）。`tools/verify_sync.feishu`、
+  `tools/check_pwa_health.feishu_card` 原各自 `_SESSION.post`，统一改走 `ks._feishu_send`。
+- **验证**：新测试 `tests/test_degrade_alert_rmae_gate.py`(14) + `tests/test_tools_feishu_use_shared_send.py`(4)，
+  先红后绿；全量 34 个测试文件绿。launchd 同款 PATH 实测：网卡 en0 ✓、直连换 token ✓、
+  webhook 直连到达飞书（无关键词探针返回 19024，不落群）✓。
+- **同类 bug**：zjpower `kdocs_sync_zj.py`、jspower `kdocs_sync_js.py` 同样裸名调用，同日一并修。
+
 ## 2026-09-06（五）· 分位数+conformal 校准区间正式上线（QUANTILE_CI_ENABLED=true）
 
 - **起因**：`quantile_utils.py` 的分位数（LightGBM P5/P10/P50/P90/P95）+ Split
